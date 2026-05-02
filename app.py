@@ -24,23 +24,26 @@ def init_connection():
 
 supabase = init_connection()
 
+# FIX DEFINITIVO LOGIN: Uso de st.sidebar.form para evitar el doble clic
 def auth_ui():
     st.sidebar.title("🔐 Acceso")
     mode = st.sidebar.radio("Acción:", ["Entrar", "Registrarse"])
-    email = st.sidebar.text_input("Email", key="login_email")
-    password = st.sidebar.text_input("Contraseña", type="password", key="login_pass")
     
-    if st.sidebar.button("Confirmar", key="btn_login"):
-        try:
-            if mode == "Entrar":
-                res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                if res.user:
-                    st.session_state.user = res.user
-                    st.rerun()
-            else:
-                supabase.auth.sign_up({"email": email, "password": password})
-                st.sidebar.success("Registro iniciado. Revisa tu email.")
-        except: st.sidebar.error("Error de credenciales.")
+    with st.sidebar.form("auth_form"):
+        email = st.text_input("Email")
+        password = st.text_input("Contraseña", type="password")
+        if st.form_submit_button("Confirmar"):
+            try:
+                if mode == "Entrar":
+                    res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                    if res.user:
+                        st.session_state.user = res.user
+                        st.rerun()
+                else:
+                    supabase.auth.sign_up({"email": email, "password": password})
+                    st.sidebar.success("Registro iniciado. Revisa tu email.")
+            except: 
+                st.error("Error de credenciales.")
 
 if "user" not in st.session_state:
     auth_ui()
@@ -74,8 +77,10 @@ def get_market_data(ticker):
 
 # --- 4. CARGA DE PORTAFOLIO ---
 user_id = st.session_state.user.id
-res = supabase.table("positions").select("*").eq("user_id", user_id).execute()
-positions_raw = res.data
+try:
+    res = supabase.table("positions").select("*").eq("user_id", user_id).execute()
+    positions_raw = res.data
+except: positions_raw = []
 
 portfolio = {}
 for p in positions_raw:
@@ -92,7 +97,7 @@ for p in positions_raw:
         "date": p.get("created_at", "")[:10]
     })
 
-# --- 5. SIDEBAR: OPERATIVA ---
+# --- 5. SIDEBAR: OPERATIVA (RECOMENDACIÓN: DESPLEGABLE DE TICKERS) ---
 with st.sidebar:
     st.title("🛠️ Configuración")
     fx_now = get_fx_rate()
@@ -102,20 +107,38 @@ with st.sidebar:
 
     st.divider()
     st.subheader("📥 Registro de Capas")
+    
+    # Lista sugerida para evitar errores de base de datos por typos
+    common_tickers = ["SOXL", "SOXX", "NVDA", "AAPL", "EEM", "GLD", "BITO", "Manual"]
+    t_select = st.selectbox("Seleccione Ticker", options=common_tickers)
+    
     with st.form("compra_form", clear_on_submit=True):
-        t_in = st.text_input("Ticker").upper().strip()
+        if t_select == "Manual":
+            t_in = st.text_input("Ingrese Ticker manualmente").upper().strip()
+        else:
+            t_in = t_select
+            
         q_in = st.number_input("Cantidad", min_value=1)
         p_in = st.number_input("Precio Compra Bruto (MXN)", min_value=0.01)
+        
         if st.form_submit_button("Confirmar Compra"):
-            costo_bruto = float(q_in * p_in)
-            costo_neto = float(costo_bruto * (1 + f_total))
-            try:
-                supabase.table("positions").insert({
-                    "user_id": user_id, "ticker": t_in, "shares": float(q_in),
-                    "total_gross_cost": costo_bruto, "total_net_cost": costo_neto
-                }).execute()
-                st.rerun()
-            except: st.error("Error en base de datos.")
+            if not t_in:
+                st.error("Por favor ingrese un Ticker.")
+            else:
+                costo_bruto = float(q_in * p_in)
+                costo_neto = float(costo_bruto * (1 + f_total))
+                try:
+                    # FIX DB: Forzado de tipos float() para compatibilidad total con Supabase
+                    supabase.table("positions").insert({
+                        "user_id": user_id, 
+                        "ticker": t_in, 
+                        "shares": float(q_in),
+                        "total_gross_cost": float(costo_bruto), 
+                        "total_net_cost": float(costo_neto)
+                    }).execute()
+                    st.rerun()
+                except: 
+                    st.error("Error en base de datos. Verifique la conexión.")
 
     if st.button("Cerrar Sesión"):
         del st.session_state.user
@@ -143,7 +166,7 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 8. MONITOREO (RESTAURADO: REGISTRAR VENTA) ---
+# --- 8. MONITOREO ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if not portfolio:
     st.info("Sin posiciones activas.")
@@ -176,16 +199,12 @@ else:
                             q_s = st.number_input("Títulos", 1, int(info["shares"]))
                             p_s = st.number_input("Precio Venta Bruto (MXN)")
                             if st.form_submit_button("Ejecutar Venta"):
-                                # Lógica de reducción proporcional de costos
                                 avg_g = info["total_gross_cost"] / info["shares"]
                                 avg_n = info["total_net_cost"] / info["shares"]
                                 new_shares = info["shares"] - q_s
-                                
                                 if new_shares <= 0:
                                     supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                                 else:
-                                    # Actualizamos la primera capa encontrada (o agregada)
-                                    # Para simplicidad en Supabase, ajustamos el registro
                                     supabase.table("positions").update({
                                         "shares": float(new_shares),
                                         "total_gross_cost": float(new_shares * avg_g),
@@ -195,7 +214,7 @@ else:
 
 # --- 9. ANÁLISIS TÉCNICO ---
 st.divider()
-t_tech_list = list(portfolio.keys()) if portfolio else ["SOXX", "SOXL", "EEM", "NVDA", "AAPL"]
+t_tech_list = list(portfolio.keys()) if portfolio else ["SOXX", "NVDA", "AAPL"]
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=t_tech_list)
 df_t = get_market_data(t_tech)
 
@@ -224,5 +243,3 @@ if df_t is not None:
     fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=60, t=10, b=10), showlegend=False)
     fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
-
-    st.latex(r"Costo_{Neto} = (Q \times P) + (Q \times P \times \%Com \times 1.16)")
