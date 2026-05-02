@@ -3,8 +3,8 @@ from supabase import create_client, Client
 
 # 1. Conexión Segura
 # Streamlit leerá automáticamente los valores de tu archivo secrets.toml
-url: str = st.secrets["https://cpjndliwqyazvogwzeam.supabase.co/rest/v1/"]
-key: str = st.secrets["sb_publishable_G8H6D-_KJ57A84DfSf66pw_R456k2B0"]
+url: str = st.secrets["SUPABASE_URL"]
+key: str = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(url, key)
 
 st.title("🏛️ Terminal Global de Inversión")
