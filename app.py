@@ -1,6 +1,7 @@
 import streamlit as st
 from supabase import create_client, Client
 import yfinance as yf
+import pandas as pd
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Terminal de Gestión Patrimonial", page_icon="💼", layout="wide")
@@ -14,32 +15,40 @@ def init_connection():
 
 supabase = init_connection()
 
-# --- FUNCIONES AUTOMATIZADAS ---
-@st.cache_data(ttl=3600)  # Actualiza el FX cada hora
+# --- FUNCIONES AUTOMATIZADAS (0.1% Style) ---
+@st.cache_data(ttl=3600)
 def get_fx_rate():
     try:
-        data = yf.download("USDMXN=X", period="1d", interval="1m")
-        return data['Close'].iloc[-1]
-    except:
-        return 17.50  # Fallback en caso de error de red
+        # Usamos Ticker para una extracción más limpia de un solo valor
+        ticker = yf.Ticker("USDMXN=X")
+        # Intentamos obtener el último precio de cierre
+        data = ticker.history(period="1d")
+        if not data.empty:
+            # Forzamos la conversión a float para evitar el TypeError
+            return float(data['Close'].iloc[-1])
+        return 17.50 # Fallback si no hay datos
+    except Exception:
+        return 17.50 # Fallback en caso de error de red
 
 # --- LÓGICA DE SESIÓN ---
 if "user" not in st.session_state:
-    # Simulación de Login (Cámbialo por tu lógica de Auth anterior si es necesario)
     st.sidebar.title("🔐 Acceso")
     email = st.sidebar.text_input("Correo")
     password = st.sidebar.text_input("Contraseña", type="password")
     if st.sidebar.button("Entrar"):
-        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-        st.session_state.user = res.user
-        st.rerun()
+        try:
+            res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+            st.session_state.user = res.user
+            st.rerun()
+        except Exception as e:
+            st.sidebar.error("Error de autenticación")
     st.stop()
 
 # --- SIDEBAR: CONFIGURACIÓN Y REGISTRO ---
 with st.sidebar:
     st.title("🛠️ Configuración")
     
-    # Automatización del FX
+    # Automatización del FX con el fix técnico
     current_fx = get_fx_rate()
     st.metric("Tipo de Cambio USD/MXN", f"${current_fx:,.4f}")
     
@@ -50,19 +59,20 @@ with st.sidebar:
     st.divider()
     
     st.title("📥 Registro de Capas")
-    with st.form("registro_form"):
+    with st.form("registro_form", clear_on_submit=True):
         ticker_input = st.text_input("Ticker").upper()
         qty_input = st.number_input("Cantidad", min_value=1, step=1)
         price_input = st.number_input("Precio Compra Bruto (MXN)", min_value=0.01, format="%.2f")
         
-        # Cálculo de fricción instantáneo
-        costo_bruto = qty_input * price_input
-        friccion = costo_bruto * comision_pct * (1 + iva_comision)
-        costo_neto = costo_bruto + friccion
-        
+        # El sistema ya conoce el FX y la Comisión, no necesitas meterlos
         submit = st.form_submit_button("Confirmar Compra")
         
         if submit and ticker_input:
+            # Cálculo de costo neto automático antes de subir a la nube
+            costo_bruto = qty_input * price_input
+            friccion = costo_bruto * comision_pct * (1 + iva_comision)
+            costo_neto = costo_bruto + friccion
+            
             try:
                 data = {
                     "user_id": st.session_state.user.id,
@@ -76,12 +86,12 @@ with st.sidebar:
                 st.success(f"Ejecutado: {ticker_input}")
                 st.balloons()
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Error al guardar: {e}")
 
 # --- PANEL PRINCIPAL: DASHBOARD ---
 st.header("💼 Terminal de Gestión Patrimonial")
 
-# Métricas Top (Placeholder para lógica de agregación de Supabase)
+# Dashboard visual (Espejo de tu versión local)
 m1, m2, m3 = st.columns(3)
 with m1:
     st.container(border=True).metric("VALOR DEL PORTAFOLIO ACTUAL", "$53,979.65")
@@ -92,17 +102,18 @@ with m3:
 
 st.divider()
 
-# Monitoreo de Posiciones
+# Monitoreo de Posiciones Activas
 st.subheader("📊 Monitoreo de Posiciones Activas")
-
-# Ejemplo de visualización de capas (Esto se alimentará de tu Query a Supabase)
-with st.expander("TBBB | USD: 36.58 (+0.22%) | Real: 🟢 -421.30 (-2.69%) | Peso: 28.4%"):
-    st.write("Detalle de capas y precio promedio...")
+with st.expander("TBBB | USD: 36.58 (+0.22%) | Real: 🔴 -421.30 (-2.69%) | Peso: 28.4%"):
+    st.write("Datos de la posición...")
 
 with st.expander("SOXL | USD: 130.40 (+2.69%) | Real: 🟢 4,631.20 (13.65%) | Peso: 71.6%"):
-    st.write("Detalle de capas y precio promedio...")
+    st.write("Datos de la posición...")
 
-# Gráfico Técnico
+# Gráfico Técnico dinámico
 st.divider()
 selected_ticker = st.selectbox("Selecciona para Gráfico Técnico:", ["TBBB", "SOXL", "EEM", "SOXX"])
-st.line_chart(yf.download(selected_ticker, period="1mo")['Close'])
+if selected_ticker:
+    hist = yf.download(selected_ticker, period="6mo")
+    if not hist.empty:
+        st.line_chart(hist['Close'])
