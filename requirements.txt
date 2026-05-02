@@ -1,0 +1,7 @@
+streamlit
+supabase
+yfinance
+pandas
+pandas-ta
+plotly
+streamlit-autorefresh
