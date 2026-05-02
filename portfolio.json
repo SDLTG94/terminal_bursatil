@@ -1,0 +1,34 @@
+{
+    "positions": {
+        "TBBB": {
+            "shares": 24,
+            "total_gross_cost": 15644.64,
+            "total_net_cost": 15690.009455999998,
+            "layers": [
+                {
+                    "qty": 24,
+                    "price_gross": 651.86,
+                    "date": "2026-05-01"
+                }
+            ]
+        },
+        "SOXL": {
+            "shares": 17,
+            "total_gross_cost": 33825.1,
+            "total_net_cost": 33923.192789999994,
+            "layers": [
+                {
+                    "qty": 5,
+                    "price_gross": 1933.58,
+                    "date": "2026-05-01"
+                },
+                {
+                    "qty": 12,
+                    "price_gross": 2013.1,
+                    "date": "2026-05-01"
+                }
+            ]
+        }
+    },
+    "realized_pnl": []
+}
