@@ -24,25 +24,23 @@ def init_connection():
 
 supabase = init_connection()
 
-# Función de Acceso (Fix definitivo: Single Click)
 def auth_ui():
     st.sidebar.title("🔐 Acceso")
     mode = st.sidebar.radio("Acción:", ["Entrar", "Registrarse"])
-    email = st.sidebar.text_input("Email")
-    password = st.sidebar.text_input("Contraseña", type="password")
+    email = st.sidebar.text_input("Email", key="login_email")
+    password = st.sidebar.text_input("Contraseña", type="password", key="login_pass")
     
-    if st.sidebar.button("Confirmar"):
+    if st.sidebar.button("Confirmar", key="btn_login"):
         try:
             if mode == "Entrar":
                 res = supabase.auth.sign_in_with_password({"email": email, "password": password})
                 if res.user:
                     st.session_state.user = res.user
-                    st.rerun() # Disparo inmediato
+                    st.rerun()
             else:
                 supabase.auth.sign_up({"email": email, "password": password})
                 st.sidebar.success("Registro iniciado. Revisa tu email.")
-        except Exception as e: 
-            st.sidebar.error("Credenciales incorrectas o error de conexión.")
+        except: st.sidebar.error("Error de credenciales.")
 
 if "user" not in st.session_state:
     auth_ui()
@@ -69,30 +67,28 @@ def get_market_data(ticker):
     df = yf.download(ticker, period="5y", interval="1d", auto_adjust=True, progress=False)
     df = clean_df(df)
     if df is not None:
-        # Cálculo Robusto
         df.ta.macd(fast=12, slow=26, signal=9, append=True)
         df.ta.stochrsi(length=14, rsi_length=14, k=3, d=3, append=True)
         df.columns = [c.lower() for c in df.columns]
     return df
 
-# --- 4. CARGA DE PORTAFOLIO (Mapeo exacto a Supabase) ---
+# --- 4. CARGA DE PORTAFOLIO ---
 user_id = st.session_state.user.id
-try:
-    res = supabase.table("positions").select("*").eq("user_id", user_id).execute()
-    positions_raw = res.data
-except: positions_raw = []
+res = supabase.table("positions").select("*").eq("user_id", user_id).execute()
+positions_raw = res.data
 
 portfolio = {}
 for p in positions_raw:
     t = p["ticker"]
     if t not in portfolio:
-        portfolio[t] = {"shares": 0, "total_gross_cost": 0, "total_net_cost": 0, "layers": []}
+        portfolio[t] = {"shares": 0, "total_gross_cost": 0, "total_net_cost": 0, "layers": [], "ids": []}
     portfolio[t]["shares"] += p["shares"]
     portfolio[t]["total_gross_cost"] += p["total_gross_cost"]
     portfolio[t]["total_net_cost"] += p["total_net_cost"]
+    portfolio[t]["ids"].append(p["id"])
     portfolio[t]["layers"].append({
         "qty": p["shares"], 
-        "price_gross": p["total_gross_cost"] / p["shares"], 
+        "price_gross": p["total_gross_cost"] / p["shares"] if p["shares"] > 0 else 0, 
         "date": p.get("created_at", "")[:10]
     })
 
@@ -114,17 +110,12 @@ with st.sidebar:
             costo_bruto = float(q_in * p_in)
             costo_neto = float(costo_bruto * (1 + f_total))
             try:
-                # Fix: Mapeo exacto según el esquema de tu base de datos
                 supabase.table("positions").insert({
-                    "user_id": user_id, 
-                    "ticker": t_in, 
-                    "shares": float(q_in),
-                    "total_gross_cost": costo_bruto, 
-                    "total_net_cost": costo_neto
+                    "user_id": user_id, "ticker": t_in, "shares": float(q_in),
+                    "total_gross_cost": costo_bruto, "total_net_cost": costo_neto
                 }).execute()
                 st.rerun()
-            except Exception as e:
-                st.error(f"Error en base de datos: {e}")
+            except: st.error("Error en base de datos.")
 
     if st.button("Cerrar Sesión"):
         del st.session_state.user
@@ -152,7 +143,7 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 8. MONITOREO ---
+# --- 8. MONITOREO (RESTAURADO: REGISTRAR VENTA) ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if not portfolio:
     st.info("Sin posiciones activas.")
@@ -173,37 +164,47 @@ else:
                     st.write("**Desglose de Capas (MXN):**")
                     st.dataframe(pd.DataFrame(info["layers"]), use_container_width=True)
                     st.write(f"**Breakeven USD Sugerido:** `${be_usd:,.2f}`")
+                
                 with col_act:
+                    st.write("**Acciones:**")
                     if st.button("🗑️ Eliminar Activo", key=f"del_{t}"):
                         supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                         st.rerun()
+                    
+                    with st.expander("📤 Registrar Venta"):
+                        with st.form(f"sell_{t}"):
+                            q_s = st.number_input("Títulos", 1, int(info["shares"]))
+                            p_s = st.number_input("Precio Venta Bruto (MXN)")
+                            if st.form_submit_button("Ejecutar Venta"):
+                                # Lógica de reducción proporcional de costos
+                                avg_g = info["total_gross_cost"] / info["shares"]
+                                avg_n = info["total_net_cost"] / info["shares"]
+                                new_shares = info["shares"] - q_s
+                                
+                                if new_shares <= 0:
+                                    supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
+                                else:
+                                    # Actualizamos la primera capa encontrada (o agregada)
+                                    # Para simplicidad en Supabase, ajustamos el registro
+                                    supabase.table("positions").update({
+                                        "shares": float(new_shares),
+                                        "total_gross_cost": float(new_shares * avg_g),
+                                        "total_net_cost": float(new_shares * avg_n)
+                                    }).eq("id", info["ids"][0]).execute()
+                                st.rerun()
 
-# --- 9. ANÁLISIS TÉCNICO (4 BLOQUES + NIVELES 80/20) ---
+# --- 9. ANÁLISIS TÉCNICO ---
 st.divider()
 t_tech_list = list(portfolio.keys()) if portfolio else ["SOXX", "SOXL", "EEM", "NVDA", "AAPL"]
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=t_tech_list)
 df_t = get_market_data(t_tech)
 
 if df_t is not None:
-    fig = make_subplots(
-        rows=4, cols=1, 
-        shared_xaxes=True, 
-        vertical_spacing=0.03, 
-        row_heights=[0.4, 0.15, 0.22, 0.23]
-    )
-    
-    # 1. Velas
-    fig.add_trace(go.Candlestick(
-        x=df_t.index, open=df_t['open'], high=df_t['high'], low=df_t['low'], close=df_t['close'], name="Precio"
-    ), row=1, col=1)
-    
-    # 2. Volumen (Bloque Independiente)
+    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.4, 0.15, 0.22, 0.23])
+    fig.add_trace(go.Candlestick(x=df_t.index, open=df_t['open'], high=df_t['high'], low=df_t['low'], close=df_t['close'], name="Precio"), row=1, col=1)
     v_colors = ['#26a69a' if df_t['close'].iloc[i] >= df_t['open'].iloc[i] else '#ef5350' for i in range(len(df_t))]
-    fig.add_trace(go.Bar(
-        x=df_t.index, y=df_t['volume'], name="Volumen", marker_color=v_colors, opacity=0.8
-    ), row=2, col=1)
+    fig.add_trace(go.Bar(x=df_t.index, y=df_t['volume'], name="Volumen", marker_color=v_colors, opacity=0.8), row=2, col=1)
     
-    # 3. MACD
     m_list = [c for c in df_t.columns if 'macd' in c.lower() and 'h' not in c.lower() and 's' not in c.lower()]
     s_list = [c for c in df_t.columns if 'macds' in c.lower()]
     h_list = [c for c in df_t.columns if 'macdh' in c.lower()]
@@ -212,7 +213,6 @@ if df_t is not None:
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
         fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
 
-    # 4. Stoch RSI + Niveles 80/20
     k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
     d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
     if k_list and d_list:
@@ -223,7 +223,6 @@ if df_t is not None:
 
     fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=60, t=10, b=10), showlegend=False)
     fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
-    
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
     st.latex(r"Costo_{Neto} = (Q \times P) + (Q \times P \times \%Com \times 1.16)")
