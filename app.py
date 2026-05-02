@@ -9,7 +9,6 @@ from supabase import create_client, Client
 # --- 1. CONFIGURACIÓN E INTERFAZ ---
 st.set_page_config(layout="wide", page_title="Institutional Global Terminal", page_icon="🏛️")
 
-# Estilos CSS para KPI Tiles (Fiel a tu dashboard local)
 st.markdown("""
     <style>
     .kpi-card { background-color: #1e2130; padding: 20px; border-radius: 10px; border-left: 5px solid #00e1ff; text-align: center; margin-bottom: 10px; }
@@ -35,8 +34,9 @@ def auth_ui():
         try:
             if mode == "Entrar":
                 res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                # FIX: Sincronización inmediata del estado de sesión
                 st.session_state.user = res.user
-                st.rerun() # Fix: Acceso inmediato sin doble clic
+                st.rerun() 
             else:
                 supabase.auth.sign_up({"email": email, "password": password})
                 st.sidebar.success("Registro enviado. Confirma tu correo.")
@@ -64,15 +64,16 @@ def get_fx_rate():
 
 @st.cache_data(ttl=300)
 def get_market_data(ticker):
-    # Cargamos 5 años para permitir zoom-out real como en Investing
     df = yf.download(ticker, period="5y", interval="1d", auto_adjust=True, progress=False)
     df = clean_df(df)
     if df is not None:
+        # FIX: Forzamos el cálculo y estandarizamos nombres de columnas para detección segura
         df.ta.macd(fast=12, slow=26, signal=9, append=True)
         df.ta.stochrsi(length=14, rsi_length=14, k=3, d=3, append=True)
+        df.columns = [c.lower() for c in df.columns]
     return df
 
-# --- 4. CARGA DE PORTAFOLIO (Mapping a Supabase) ---
+# --- 4. CARGA DE PORTAFOLIO ---
 user_id = st.session_state.user.id
 try:
     res = supabase.table("positions").select("*").eq("user_id", user_id).execute()
@@ -108,25 +109,20 @@ with st.sidebar:
         q_in = st.number_input("Cantidad", min_value=1)
         p_in = st.number_input("Precio Compra Bruto (MXN)", min_value=0.01)
         if st.form_submit_button("Confirmar Compra"):
-            cost_neto = (q_in * p_in) * (1 + f_total)
+            costo_neto = (q_in * p_in) * (1 + f_total)
             try:
-                # Fix APIError: Usamos exactamente las columnas de tu esquema de Supabase
                 supabase.table("positions").insert({
-                    "user_id": user_id, 
-                    "ticker": t_in, 
-                    "shares": float(q_in),
-                    "total_gross_cost": float(q_in * p_in), 
-                    "total_net_cost": float(cost_neto)
+                    "user_id": user_id, "ticker": t_in, "shares": float(q_in),
+                    "total_gross_cost": float(q_in * p_in), "total_net_cost": float(costo_neto)
                 }).execute()
                 st.rerun()
-            except Exception as e:
-                st.error("Error en base de datos. Revisa las columnas en Supabase.")
+            except: st.error("Error en base de datos.")
 
     if st.button("Cerrar Sesión"):
         del st.session_state.user
         st.rerun()
 
-# --- 6. PROCESAMIENTO DE DATOS ---
+# --- 6. PROCESAMIENTO ---
 active_data = {}
 total_nav = 0.0
 for t, info in portfolio.items():
@@ -137,7 +133,7 @@ for t, info in portfolio.items():
         total_nav += v_mkt
         active_data[t] = {"p_usd": p_usd, "v_mkt": v_mkt, "df": df, "prev_usd": float(df['close'].iloc[-2])}
 
-# --- 7. DASHBOARD: KPI TILES ---
+# --- 7. DASHBOARD ---
 st.title("💼 Terminal de Gestión Patrimonial")
 k1, k2, k3 = st.columns(3)
 unrealized_net = sum((active_data[t]["v_mkt"]*(1-f_total)) - portfolio[t]["total_net_cost"] for t in active_data) if active_data else 0.0
@@ -148,10 +144,10 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 8. MONITOREO DE POSICIONES (Desglose de Capas) ---
+# --- 8. MONITOREO ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if not portfolio:
-    st.info("Sin posiciones activas. Registra una compra en la barra lateral.")
+    st.info("Sin posiciones activas.")
 else:
     for t, info in portfolio.items():
         if t in active_data:
@@ -174,40 +170,51 @@ else:
                         supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                         st.rerun()
 
-# --- 9. ANÁLISIS TÉCNICO (Plotly Eje Derecho + Auto-ajuste) ---
+# --- 9. ANÁLISIS TÉCNICO (FIX: 4 BLOQUES SEPARADOS) ---
 st.divider()
 t_list = list(portfolio.keys()) if portfolio else ["SOXX"]
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=t_list)
 df_t = get_market_data(t_tech)
 
 if df_t is not None:
-    # Subplots para evitar el aplanamiento de las velas por el volumen
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.5, 0.25, 0.25], specs=[[{"secondary_y": True}], [{}], [{}]])
+    # Definimos 4 filas para: Precio, Volumen, MACD y Stoch RSI
+    fig = make_subplots(
+        rows=4, cols=1, 
+        shared_xaxes=True, 
+        vertical_spacing=0.03, 
+        row_heights=[0.4, 0.15, 0.22, 0.23]
+    )
     
-    # 1. Velas Japonesas
-    fig.add_trace(go.Candlestick(x=df_t.index, open=df_t['open'], high=df_t['high'], low=df_t['low'], close=df_t['close'], name="Precio"), row=1, col=1, secondary_y=False)
+    # 1. Velas (Precio)
+    fig.add_trace(go.Candlestick(
+        x=df_t.index, open=df_t['open'], high=df_t['high'], low=df_t['low'], close=df_t['close'], name="Precio"
+    ), row=1, col=1)
     
-    # Volumen en eje secundario para no aplastar el precio
-    fig.add_trace(go.Bar(x=df_t.index, y=df_t['volume'], name="Volumen", marker_color='rgba(128,128,128,0.2)'), row=1, col=1, secondary_y=True)
+    # 2. Volumen (Bloque Independiente)
+    v_colors = ['#26a69a' if df_t['close'].iloc[i] >= df_t['open'].iloc[i] else '#ef5350' for i in range(len(df_t))]
+    fig.add_trace(go.Bar(
+        x=df_t.index, y=df_t['volume'], name="Volumen", marker_color=v_colors, opacity=0.8
+    ), row=2, col=1)
     
-    # 2. MACD
-    m_c = [c for c in df_t.columns if 'macd_12_26_9' in c]
+    # 3. MACD (Detección Robusta)
+    m_c = [c for c in df_t.columns if 'macd' in c and 'h' not in c and 's' not in c]
     s_c = [c for c in df_t.columns if 'macds' in c]
     h_c = [c for c in df_t.columns if 'macdh' in c]
-    if m_c:
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_c[0]], name="MACD", line=dict(color='#00e1ff')), row=2, col=1)
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_c[0]], name="Signal", line=dict(color='#ff9900')), row=2, col=1)
-        fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_c[0]], name="Hist"), row=2, col=1)
+    if m_c and s_c:
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_c[0]], name="MACD", line=dict(color='#00e1ff', width=1.5)), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_c[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
+        fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_c[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
 
-    # 3. Stoch RSI
+    # 4. Stoch RSI (Detección Robusta)
     k_c = [c for c in df_t.columns if 'stochrsik' in c]
     d_c = [c for c in df_t.columns if 'stochrsid' in c]
-    if k_c:
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[k_c[0]], name="%K", line=dict(color='#00ff88')), row=3, col=1)
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[d_c[0]], name="%D", line=dict(color='#ff4b4b', dash='dot')), row=3, col=1)
+    if k_c and d_c:
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[k_c[0]], name="%K", line=dict(color='#00ff88', width=1.5)), row=4, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[d_c[0]], name="%D", line=dict(color='#ff4b4b', width=1.5, dash='dot')), row=4, col=1)
+        fig.add_hline(y=80, line_dash="dash", line_color="rgba(255,255,255,0.2)", row=4, col=1)
+        fig.add_hline(y=20, line_dash="dash", line_color="rgba(255,255,255,0.2)", row=4, col=1)
 
-    fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=60, t=10, b=10))
+    fig.update_layout(height=900, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=60, t=10, b=10), showlegend=False)
     fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
-    fig.update_yaxes(showticklabels=False, secondary_y=True, row=1, col=1) # Ocultamos ticks de volumen
     
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
