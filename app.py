@@ -16,8 +16,6 @@ st.markdown("""
     .kpi-card { background-color: #1e2130; padding: 20px; border-radius: 10px; border-left: 5px solid #00e1ff; text-align: center; margin-bottom: 10px; }
     .kpi-val { font-size: 26px; font-weight: bold; color: white; }
     .kpi-lbl { font-size: 13px; color: #808495; text-transform: uppercase; letter-spacing: 1px; }
-    /* Eliminamos el padding inferior para reducir espacio muerto */
-    .main .block-container { padding-bottom: 0rem; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -48,7 +46,7 @@ if "user" not in st.session_state:
             st.sidebar.error(f"Error: {e}")
     st.stop()
 
-# --- 4. MOTORES DE CÁLCULO (STRICT V4.1) ---
+# --- 4. MOTORES DE CÁLCULO (VERSION 4.1) ---
 def clean_df(df):
     if df is None or df.empty: return None
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
@@ -73,7 +71,7 @@ def get_market_data(ticker):
         df.columns = [c.lower() for c in df.columns]
     return df
 
-# --- 5. CARGA DE DATOS ---
+# --- 5. CARGA DE DATOS (VERSION 4.1) ---
 user_id = st.session_state.user.id
 try:
     res_pos = supabase.table("positions").select("*").eq("user_id", user_id).execute()
@@ -95,7 +93,18 @@ for p in positions_raw:
     portfolio[t]["ids"].append(p["id"])
     portfolio[t]["layers"].append({"qty": p["shares"], "p_gross": p["total_gross_cost"]/p["shares"], "date": p.get("created_at", "")[:10]})
 
-# --- 6. SIDEBAR: OPERATIVA (STRICT V4.1) ---
+# --- 6. PROCESAMIENTO DE MERCADO ---
+active_data = {}
+total_nav = 0.0
+for t, info in portfolio.items():
+    df = get_market_data(t)
+    if df is not None:
+        p_usd = float(df['close'].iloc[-1])
+        v_mkt = p_usd * fx_now * info["shares"]
+        total_nav += v_mkt
+        active_data[t] = {"p_usd": p_usd, "v_mkt": v_mkt, "df": df, "prev_usd": float(df['close'].iloc[-2])}
+
+# --- 7. SIDEBAR: OPERATIVA Y TOBIAS (NUEVA UBICACIÓN) ---
 with st.sidebar:
     st.title("🛠️ Configuración")
     fx_now = get_fx_rate()
@@ -112,19 +121,41 @@ with st.sidebar:
                 c_neto = float((q_in * p_in) * (1 + f_total))
                 supabase.table("positions").insert({"user_id": user_id, "ticker": t_final, "shares": float(q_in), "total_gross_cost": float(q_in*p_in), "total_net_cost": c_neto}).execute()
                 st.rerun()
+    
+    st.divider()
+    
+    # --- INTEGRACIÓN DE TOBIAS EN EL SIDEBAR ---
+    resumen_data = []
+    if portfolio:
+        for ticker, data in portfolio.items():
+            if ticker in active_data:
+                m = active_data[ticker]
+                p_neto = ((m["v_mkt"]*(1-f_total)) - data["total_net_cost"]) / data["total_net_cost"] * 100
+                resumen_data.append(f"{ticker}: {int(data['shares'])} títulos, retorno {p_neto:+.2f}%")
+        contexto_tobias = " | ".join(resumen_data)
+    else:
+        contexto_tobias = "Sin posiciones."
 
-# --- 7. PROCESAMIENTO DE MERCADO ---
-active_data = {}
-total_nav = 0.0
-for t, info in portfolio.items():
-    df = get_market_data(t)
-    if df is not None:
-        p_usd = float(df['close'].iloc[-1])
-        v_mkt = p_usd * fx_now * info["shares"]
-        total_nav += v_mkt
-        active_data[t] = {"p_usd": p_usd, "v_mkt": v_mkt, "df": df, "prev_usd": float(df['close'].iloc[-2])}
+    safe_context = contexto_tobias.replace('"', '\\"')
+    
+    # El widget se renderiza estáticamente dentro del sidebar
+    tobias_widget = f"""
+    <div style="display: flex; flex-direction: column; align-items: center; background: #1e2130; padding: 15px; border-radius: 12px; border: 1px solid #3d425a;">
+        <elevenlabs-convai 
+            agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"
+            dynamic-variables='{{"portfolio_context": "{safe_context}"}}'
+            override-config='{{"launcher": {{"label": "¿Tienes dudas?", "callActionText": "Habla con Tobias"}}}}'>
+        </elevenlabs-convai>
+        <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
+    </div>
+    """
+    components.html(tobias_widget, height=180)
+    
+    if st.button("Cerrar Sesión"):
+        del st.session_state.user
+        st.rerun()
 
-# --- 8. DASHBOARD KPI (STRICT V4.1) ---
+# --- 8. DASHBOARD KPI (VERSION 4.1) ---
 st.title("💼 Terminal de Gestión Patrimonial")
 k1, k2, k3 = st.columns(3)
 unrealized_net = sum((active_data[t]["v_mkt"]*(1-f_total)) - portfolio[t]["total_net_cost"] for t in active_data) if active_data else 0.0
@@ -134,11 +165,9 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 9. MONITOREO Y VENTAS (RESTAURACIÓN TOTAL V4.1) ---
+# --- 9. MONITOREO Y VENTAS (VERSION 4.1 COMPLETO) ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
-if not portfolio:
-    st.info("Sin posiciones activas.")
-else:
+if portfolio:
     for t, info in portfolio.items():
         if t in active_data:
             m = active_data[t]
@@ -149,11 +178,11 @@ else:
             weight = (m["v_mkt"] / total_nav) * 100
             v_d = ((m["p_usd"] / m["prev_usd"]) - 1) * 100
             
+            # Formato exacto Versión 4.1
             h_text = f"{t} | USD: ${m['p_usd']:,.2f} ({v_d:+.2f}%) | Real: {status} ${net_pnl:,.2f} ({pnl_pct:+.2f}%) | Peso: {weight:.1f}%"
             with st.expander(h_text):
                 c_df, c_btn = st.columns([0.7, 0.3])
                 with c_df:
-                    st.write("**Capas (MXN):**")
                     st.dataframe(pd.DataFrame(info["layers"]), use_container_width=True)
                     st.write(f"**Breakeven USD Sugerido:** `${be_usd:,.2f}`")
                 with c_btn:
@@ -171,16 +200,15 @@ else:
                                 pnl_realized = float(rev_net - (q_sell * avg_net_cost))
                                 supabase.table("trades").insert({"user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)}).execute()
                                 n_sh = info["shares"] - q_sell
-                                if n_sh <= 0:
-                                    supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
+                                if n_sh <= 0: supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                                 else:
                                     avg_g = info["total_gross_cost"] / info["shares"]
                                     supabase.table("positions").update({"shares": float(n_sh), "total_gross_cost": float(n_sh * avg_g), "total_net_cost": float(n_sh * avg_net_cost)}).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
-# --- 10. GRÁFICO TÉCNICO (EJE DERECHO V4.1) ---
+# --- 10. GRÁFICO TÉCNICO (EJE DERECHO VERSION 4.1) ---
 st.divider()
-t_tech = st.selectbox("Análisis Técnico:", options=list(portfolio.keys()) if portfolio else ["SOXX"])
+t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=list(portfolio.keys()) if portfolio else ["SOXX"])
 df_t = get_market_data(t_tech)
 if df_t is not None:
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.4, 0.15, 0.22, 0.23])
@@ -195,51 +223,14 @@ if df_t is not None:
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_list[0]], name="MACD", line=dict(color='#00e1ff')), row=3, col=1)
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900')), row=3, col=1)
         fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='gray'), row=3, col=1)
-        
+    
     k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
-    d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
-    if k_list and d_list:
+    if k_list:
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[k_list[0]], name="%K", line=dict(color='#00ff88')), row=4, col=1)
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[d_list[0]], name="%D", line=dict(color='#ff4b4b', dash='dot')), row=4, col=1)
         fig.add_hline(y=80, line_dash="dash", line_color="white", row=4, col=1)
         fig.add_hline(y=20, line_dash="dash", line_color="white", row=4, col=1)
     
+    # Eje Y a la Derecha (v4.1)
     fig.update_yaxes(side="right", gridcolor="rgba(128,128,128,0.1)")
     fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(l=10, r=60, t=10, b=10))
     st.plotly_chart(fig, use_container_width=True)
-
-# --- 11. TOBIAS: FUSIÓN TOTAL (CONTEXTO + VISIBILIDAD) ---
-sum_data = []
-if portfolio:
-    for ticker, info in portfolio.items():
-        if ticker in active_data:
-            m = active_data[ticker]
-            pnl_p = ((m["v_mkt"]*(1-f_total)) - info["total_net_cost"]) / info["total_net_cost"] * 100
-            sum_data.append(f"{ticker}: {int(info['shares'])} títulos, costo ${info['total_net_cost']/info['shares']:.2f}, retorno {pnl_p:+.2f}%")
-    tobias_context = " | ".join(sum_data)
-else:
-    tobias_context = "Sin posiciones."
-
-safe_context = tobias_context.replace('"', '\\"')
-
-# LLAVE DEL ÉXITO: El CSS del botón DEBE estar dentro del iframe de Streamlit
-tobias_widget = f"""
-<style>
-    .elevenlabs-wrapper {{
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        z-index: 999999;
-    }}
-</style>
-<div class="elevenlabs-wrapper">
-    <elevenlabs-convai 
-        agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"
-        dynamic-variables='{{"portfolio_context": "{safe_context}"}}'
-        override-config='{{"launcher": {{"label": "¿Tienes dudas?", "callActionText": "Habla con Tobias, tu asesor de inversión"}}}}'>
-    </elevenlabs-convai>
-    <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
-</div>
-"""
-# Height=200 es el punto exacto para que el botón se renderice y el iframe no tape nada
-components.html(tobias_widget, height=200)
