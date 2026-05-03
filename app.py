@@ -10,11 +10,21 @@ import streamlit.components.v1 as components
 # --- 1. CONFIGURACIÓN E INTERFAZ ---
 st.set_page_config(layout="wide", page_title="Institutional Global Terminal", page_icon="🏛️")
 
+# Inyección de CSS para KPIs y el Botón Flotante de Tobias
 st.markdown("""
     <style>
     .kpi-card { background-color: #1e2130; padding: 20px; border-radius: 10px; border-left: 5px solid #00e1ff; text-align: center; margin-bottom: 10px; }
     .kpi-val { font-size: 26px; font-weight: bold; color: white; }
     .kpi-lbl { font-size: 13px; color: #808495; text-transform: uppercase; letter-spacing: 1px; }
+    
+    /* Contenedor del Agente Flotante */
+    .floating-agent {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 9999;
+        background: transparent;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -78,6 +88,7 @@ user_id = st.session_state.user.id
 try:
     res_pos = supabase.table("positions").select("*").eq("user_id", user_id).execute()
     positions_raw = res_pos.data
+    # Sumatoria de Utilidad Realizada desde tabla trades (v4.1)
     res_trades = supabase.table("trades").select("amount").eq("user_id", user_id).execute()
     realized_sum = sum(item["amount"] for item in res_trades.data)
 except: 
@@ -99,22 +110,9 @@ for p in positions_raw:
         "date": p.get("created_at", "")[:10]
     })
 
-# --- 6. SIDEBAR: OPERATIVA Y AGENTE TOBIAS ---
+# --- 6. SIDEBAR: OPERATIVA ---
 with st.sidebar:
     st.title("🛠️ Configuración")
-    
-    # --- INTEGRACIÓN DEL AGENTE TOBIAS (WIDGET) ---
-    st.subheader("🎙️ Habla con Tobias")
-    # El componente HTML para el widget de ElevenLabs
-    tobias_widget = """
-    <div style="display: flex; justify-content: center; align-items: center; background: #1e2130; border-radius: 10px; padding: 10px; border: 1px solid #3d425a;">
-        <elevenlabs-convai agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"></elevenlabs-convai>
-        <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
-    </div>
-    """
-    components.html(tobias_widget, height=120)
-    
-    st.divider()
     fx_now = get_fx_rate()
     st.metric("FX USD/MXN", f"${fx_now:,.4f}")
     comm_pct = st.number_input("Comisión Broker (%)", value=0.25, step=0.01) / 100
@@ -175,6 +173,7 @@ else:
         if t in active_data:
             m = active_data[t]
             net_pnl = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
+            # Porcentaje Neto real considerando comisiones (v4.1)
             pnl_pct = (net_pnl / info["total_net_cost"]) * 100 if info["total_net_cost"] > 0 else 0
             be_usd = info["total_net_cost"] / (info["shares"] * fx_now * (1 - f_total))
             status = "🟢" if net_pnl >= 0 else "🔴"
@@ -210,7 +209,7 @@ else:
                                     supabase.table("positions").update({"shares": float(remaining_shares), "total_gross_cost": float(remaining_shares * avg_gross_cost), "total_net_cost": float(remaining_shares * avg_net_cost)}).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
-# --- 10. GRÁFICO TÉCNICO ---
+# --- 10. GRÁFICO TÉCNICO (VERSION 4.1) ---
 st.divider()
 t_tech_list = list(portfolio.keys()) if portfolio else ["SOXX", "NVDA", "AAPL"]
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=t_tech_list)
@@ -230,6 +229,7 @@ if df_t is not None:
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
         fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
 
+    # Stoch RSI con niveles institucionales 80/20 (v4.1)
     k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
     d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
     if k_list and d_list:
@@ -241,3 +241,14 @@ if df_t is not None:
     fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=60, t=10, b=10), showlegend=False)
     fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
+
+# --- 11. AGENTE FLOTANTE TOBIAS (NUEVO) ---
+# Inyectamos el widget como un componente fijo en la pantalla
+tobias_floating_html = """
+<div class="floating-agent">
+    <elevenlabs-convai agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"></elevenlabs-convai>
+    <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
+</div>
+"""
+# Usamos un height grande para que el widget se despliegue hacia arriba sin cortarse
+components.html(tobias_floating_html, height=500)
