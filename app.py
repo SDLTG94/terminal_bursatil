@@ -16,14 +16,6 @@ st.markdown("""
     .kpi-card { background-color: #1e2130; padding: 20px; border-radius: 10px; border-left: 5px solid #00e1ff; text-align: center; margin-bottom: 10px; }
     .kpi-val { font-size: 26px; font-weight: bold; color: white; }
     .kpi-lbl { font-size: 13px; color: #808495; text-transform: uppercase; letter-spacing: 1px; }
-    
-    /* Contenedor del Agente Flotante - Posicionado para no crear espacio muerto */
-    .floating-agent {
-        position: fixed;
-        bottom: 10px;
-        right: 10px;
-        z-index: 9999;
-    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -188,7 +180,7 @@ else:
                                     supabase.table("positions").update({"shares": float(n_sh), "total_gross_cost": float(n_sh * avg_g), "total_net_cost": float(n_sh * avg_net_cost)}).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
-# --- 10. GRÁFICO TÉCNICO (STRICT V4.1 INDICATORS) ---
+# --- 10. GRÁFICO TÉCNICO (EJE DERECHO + 4.1) ---
 st.divider()
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=list(portfolio.keys()) if portfolio else ["SOXX"])
 df_t = get_market_data(t_tech)
@@ -211,25 +203,29 @@ if df_t is not None:
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[d_list[0]], name="%D", line=dict(color='#ff4b4b', dash='dot')), row=4, col=1)
         fig.add_hline(y=80, line_dash="dash", line_color="white", row=4, col=1)
         fig.add_hline(y=20, line_dash="dash", line_color="white", row=4, col=1)
-    fig.update_layout(height=900, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False)
+    
+    # Eje Y a la derecha (Cambio solicitado)
+    fig.update_yaxes(side="right", gridcolor="rgba(128,128,128,0.1)")
+    fig.update_layout(height=900, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(l=10, r=60, t=10, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
-# --- 11. TOBIAS: CONTEXTO Y WIDGET CON ESPACIO REDUCIDO ---
+# --- 11. TOBIAS: WIDGET FLOTANTE (FIX VISIBILIDAD) ---
 summary_data = []
 if portfolio:
     for ticker, info in portfolio.items():
         if ticker in active_data:
             m = active_data[ticker]
-            p_neto = ((m["v_mkt"]*(1-f_total)) - info["total_net_cost"]) / info["total_net_cost"] * 100
-            summary_data.append(f"{ticker}: {int(info['shares'])} títulos, costo ${info['total_net_cost']/info['shares']:.2f}, retorno {p_neto:+.2f}%")
+            p_n = ((m["v_mkt"]*(1-f_total)) - info["total_net_cost"]) / info["total_net_cost"] * 100
+            summary_data.append(f"{ticker}: {int(info['shares'])} títulos, costo ${info['total_net_cost']/info['shares']:.2f}, retorno {p_n:+.2f}%")
     contexto_tobias = " | ".join(summary_data)
 else:
     contexto_tobias = "Sin posiciones."
 
 safe_context = contexto_tobias.replace('"', '\\"')
 
+# Colocamos el widget en un componente de altura controlada al final
 tobias_html = f"""
-<div class="floating-agent">
+<div style="position: fixed; bottom: 20px; right: 20px; z-index: 999999;">
     <elevenlabs-convai 
         agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"
         dynamic-variables='{{"portfolio_context": "{safe_context}"}}'
@@ -238,5 +234,5 @@ tobias_html = f"""
     <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
 </div>
 """
-# Reducimos el height a 120 para eliminar el espacio en blanco masivo
-components.html(tobias_html, height=120)
+# Height=100 asegura que el botón sea visible sin crear espacio muerto masivo
+components.html(tobias_html, height=100)
