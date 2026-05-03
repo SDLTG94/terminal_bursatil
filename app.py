@@ -17,33 +17,39 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CONEXIÓN Y SEGURIDAD ---
-@st.cache_resource
-def init_connection():
+# --- 2. CONEXIÓN SEGURA A SUPABASE ---
+def get_supabase():
+    # Inicialización dinámica para evitar sesiones latentes
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-supabase = init_connection()
+supabase = get_supabase()
 
-# FIX DEFINITIVO LOGIN: Uso de st.sidebar.form para evitar el doble clic
+# FIX: Función de Acceso con Callback para evitar el doble clic
+def login_callback():
+    if "email_input" in st.session_state and "pass_input" in st.session_state:
+        try:
+            res = supabase.auth.sign_in_with_password({
+                "email": st.session_state.email_input, 
+                "password": st.session_state.pass_input
+            })
+            if res.user:
+                st.session_state.user = res.user
+        except:
+            st.session_state.login_error = True
+
 def auth_ui():
     st.sidebar.title("🔐 Acceso")
     mode = st.sidebar.radio("Acción:", ["Entrar", "Registrarse"])
+    st.sidebar.text_input("Email", key="email_input")
+    st.sidebar.text_input("Contraseña", type="password", key="pass_input")
     
-    with st.sidebar.form("auth_form"):
-        email = st.text_input("Email")
-        password = st.text_input("Contraseña", type="password")
-        if st.form_submit_button("Confirmar"):
-            try:
-                if mode == "Entrar":
-                    res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                    if res.user:
-                        st.session_state.user = res.user
-                        st.rerun()
-                else:
-                    supabase.auth.sign_up({"email": email, "password": password})
-                    st.sidebar.success("Registro iniciado. Revisa tu email.")
-            except: 
-                st.error("Error de credenciales.")
+    if st.sidebar.button("Confirmar", on_click=login_callback):
+        if "user" in st.session_state:
+            st.rerun()
+    
+    if st.session_state.get("login_error"):
+        st.sidebar.error("Credenciales incorrectas.")
+        st.session_state.login_error = False
 
 if "user" not in st.session_state:
     auth_ui()
@@ -78,7 +84,8 @@ def get_market_data(ticker):
 # --- 4. CARGA DE PORTAFOLIO ---
 user_id = st.session_state.user.id
 try:
-    res = supabase.table("positions").select("*").eq("user_id", user_id).execute()
+    # Refrescamos cliente antes de la carga crítica
+    res = get_supabase().table("positions").select("*").eq("user_id", user_id).execute()
     positions_raw = res.data
 except: positions_raw = []
 
@@ -97,7 +104,7 @@ for p in positions_raw:
         "date": p.get("created_at", "")[:10]
     })
 
-# --- 5. SIDEBAR: OPERATIVA (RECOMENDACIÓN: DESPLEGABLE DE TICKERS) ---
+# --- 5. SIDEBAR: OPERATIVA (CON DROPDOWN DE TICKERS) ---
 with st.sidebar:
     st.title("🛠️ Configuración")
     fx_now = get_fx_rate()
@@ -108,37 +115,27 @@ with st.sidebar:
     st.divider()
     st.subheader("📥 Registro de Capas")
     
-    # Lista sugerida para evitar errores de base de datos por typos
-    common_tickers = ["SOXL", "SOXX", "NVDA", "AAPL", "EEM", "GLD", "BITO", "Manual"]
-    t_select = st.selectbox("Seleccione Ticker", options=common_tickers)
+    # Dropdown de Tickers para mitigar error humano
+    common_tickers = ["SOXL", "SOXX", "NVDA", "AAPL", "EEM", "Manual"]
+    t_choice = st.selectbox("Ticker", options=common_tickers)
     
     with st.form("compra_form", clear_on_submit=True):
-        if t_select == "Manual":
-            t_in = st.text_input("Ingrese Ticker manualmente").upper().strip()
-        else:
-            t_in = t_select
-            
+        t_final = st.text_input("Confirmar Ticker").upper().strip() if t_choice == "Manual" else t_choice
         q_in = st.number_input("Cantidad", min_value=1)
         p_in = st.number_input("Precio Compra Bruto (MXN)", min_value=0.01)
         
         if st.form_submit_button("Confirmar Compra"):
-            if not t_in:
-                st.error("Por favor ingrese un Ticker.")
-            else:
-                costo_bruto = float(q_in * p_in)
-                costo_neto = float(costo_bruto * (1 + f_total))
-                try:
-                    # FIX DB: Forzado de tipos float() para compatibilidad total con Supabase
-                    supabase.table("positions").insert({
-                        "user_id": user_id, 
-                        "ticker": t_in, 
-                        "shares": float(q_in),
-                        "total_gross_cost": float(costo_bruto), 
-                        "total_net_cost": float(costo_neto)
-                    }).execute()
-                    st.rerun()
-                except: 
-                    st.error("Error en base de datos. Verifique la conexión.")
+            costo_bruto = float(q_in * p_in)
+            costo_neto = float(costo_bruto * (1 + f_total))
+            try:
+                # Inserción con cliente fresco para evitar APIError
+                get_supabase().table("positions").insert({
+                    "user_id": user_id, "ticker": t_final, "shares": float(q_in),
+                    "total_gross_cost": costo_bruto, "total_net_cost": costo_neto
+                }).execute()
+                st.rerun()
+            except Exception as e:
+                st.error("Error en base de datos. Verifique la conexión.")
 
     if st.button("Cerrar Sesión"):
         del st.session_state.user
@@ -166,7 +163,7 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 8. MONITOREO ---
+# --- 8. MONITOREO (CON REGISTRAR VENTA) ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if not portfolio:
     st.info("Sin posiciones activas.")
@@ -191,7 +188,7 @@ else:
                 with col_act:
                     st.write("**Acciones:**")
                     if st.button("🗑️ Eliminar Activo", key=f"del_{t}"):
-                        supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
+                        get_supabase().table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                         st.rerun()
                     
                     with st.expander("📤 Registrar Venta"):
@@ -203,16 +200,16 @@ else:
                                 avg_n = info["total_net_cost"] / info["shares"]
                                 new_shares = info["shares"] - q_s
                                 if new_shares <= 0:
-                                    supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
+                                    get_supabase().table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                                 else:
-                                    supabase.table("positions").update({
+                                    get_supabase().table("positions").update({
                                         "shares": float(new_shares),
                                         "total_gross_cost": float(new_shares * avg_g),
                                         "total_net_cost": float(new_shares * avg_n)
                                     }).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
-# --- 9. ANÁLISIS TÉCNICO ---
+# --- 9. ANÁLISIS TÉCNICO (4 BLOQUES + NIVELES 80/20) ---
 st.divider()
 t_tech_list = list(portfolio.keys()) if portfolio else ["SOXX", "NVDA", "AAPL"]
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=t_tech_list)
