@@ -9,7 +9,6 @@ from supabase import create_client, Client
 # --- 1. CONFIGURACIÓN E INTERFAZ ---
 st.set_page_config(layout="wide", page_title="Institutional Global Terminal", page_icon="🏛️")
 
-# Estilos Institucionales
 st.markdown("""
     <style>
     .kpi-card { background-color: #1e2130; padding: 20px; border-radius: 10px; border-left: 5px solid #00e1ff; text-align: center; margin-bottom: 10px; }
@@ -25,7 +24,7 @@ def get_supabase():
 
 supabase = get_supabase()
 
-# --- 3. GESTIÓN DE SESIÓN (FIX DOBLE CLIC) ---
+# --- 3. GESTIÓN DE SESIÓN ---
 if "user" not in st.session_state:
     st.sidebar.title("🔐 Acceso")
     auth_mode = st.sidebar.radio("Acción:", ["Entrar", "Registrarse"])
@@ -43,7 +42,7 @@ if "user" not in st.session_state:
                 supabase.auth.sign_up({"email": email, "password": password})
                 st.sidebar.success("Registro enviado. Confirma tu correo.")
         except Exception as e:
-            st.sidebar.error(f"Error de acceso: {e}")
+            st.sidebar.error(f"Error: {e}")
     st.stop()
 
 # --- 4. MOTORES DE CÁLCULO ---
@@ -72,8 +71,10 @@ def get_market_data(ticker):
         df.columns = [c.lower() for c in df.columns]
     return df
 
-# --- 5. CARGA DE DATOS ---
+# --- 5. CARGA DE DATOS (Posiciones y Utilidad Realizada) ---
 user_id = st.session_state.user.id
+
+# Carga de Posiciones Activas
 try:
     res_pos = supabase.table("positions").select("*").eq("user_id", user_id).execute()
     positions_raw = res_pos.data
@@ -94,50 +95,40 @@ for p in positions_raw:
         "date": p.get("created_at", "")[:10]
     })
 
-# --- 6. SIDEBAR: OPERATIVA ---
+# Carga de Utilidad Realizada Histórica
+try:
+    res_trades = supabase.table("trades").select("amount").eq("user_id", user_id).execute()
+    realized_sum = sum(item["amount"] for item in res_trades.data)
+except: realized_sum = 0.0
+
+# --- 6. SIDEBAR: REGISTRO DE COMPRAS ---
 with st.sidebar:
     st.title("🛠️ Configuración")
     fx_now = get_fx_rate()
     st.metric("FX USD/MXN", f"${fx_now:,.4f}")
     comm_pct = st.number_input("Comisión Broker (%)", value=0.25, step=0.01) / 100
-    f_total = comm_pct * 1.16
+    f_total = comm_pct * 1.16 # IVA incluido
 
     st.divider()
     st.subheader("📥 Registro de Capas")
-    
-    # Selector de Ticker para evitar errores de escritura
-    t_list = ["SOXL", "SOXX", "NVDA", "AAPL", "EEM", "Manual"]
+    t_list = ["SOXL", "SOXX", "NVDA", "AAPL", "COST", "PFE", "Manual"]
     t_choice = st.selectbox("Ticker", options=t_list)
     
     with st.form("form_compra", clear_on_submit=True):
-        t_manual = ""
-        if t_choice == "Manual":
-            t_manual = st.text_input("Confirmar Ticker").upper().strip()
-        
+        t_final = st.text_input("Confirmar Ticker").upper().strip() if t_choice == "Manual" else t_choice
         q_in = st.number_input("Cantidad", min_value=1)
         p_in = st.number_input("Precio Compra Bruto (MXN)", min_value=0.01)
         
-        btn_compra = st.form_submit_button("Confirmar Compra")
-        
-        if btn_compra:
-            t_final = t_manual if t_choice == "Manual" else t_choice
-            if not t_final:
-                st.error("Error: Ticker no definido.")
+        if st.form_submit_button("Confirmar Compra"):
+            if not t_final: st.error("Ticker no definido.")
             else:
                 c_bruto = float(q_in * p_in)
                 c_neto = float(c_bruto * (1 + f_total))
-                try:
-                    # Inserción Directa (Mapeo exacto a Supabase)
-                    supabase.table("positions").insert({
-                        "user_id": user_id, 
-                        "ticker": t_final, 
-                        "shares": float(q_in),
-                        "total_gross_cost": c_bruto, 
-                        "total_net_cost": c_neto
-                    }).execute()
-                    st.rerun()
-                except Exception as db_err:
-                    st.error(f"Error DB: {db_err}")
+                supabase.table("positions").insert({
+                    "user_id": user_id, "ticker": t_final, "shares": float(q_in),
+                    "total_gross_cost": c_bruto, "total_net_cost": c_neto
+                }).execute()
+                st.rerun()
 
     if st.button("Cerrar Sesión"):
         del st.session_state.user
@@ -160,12 +151,12 @@ k1, k2, k3 = st.columns(3)
 unrealized_net = sum((active_data[t]["v_mkt"]*(1-f_total)) - portfolio[t]["total_net_cost"] for t in active_data) if active_data else 0.0
 
 with k1: st.markdown(f"<div class='kpi-card'><div class='kpi-lbl'>VALOR DEL PORTAFOLIO</div><div class='kpi-val'>${total_nav:,.2f}</div></div>", unsafe_allow_html=True)
-with k2: st.markdown(f"<div class='kpi-card' style='border-left-color: #00ff88;'><div class='kpi-lbl'>UTILIDAD REALIZADA</div><div class='kpi-val'>$0.00</div></div>", unsafe_allow_html=True)
+with k2: st.markdown(f"<div class='kpi-card' style='border-left-color: #00ff88;'><div class='kpi-lbl'>UTILIDAD REALIZADA</div><div class='kpi-val'>${realized_sum:,.2f}</div></div>", unsafe_allow_html=True)
 with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'><div class='kpi-lbl'>PLUSVALIA NETA</div><div class='kpi-val'>${unrealized_net:,.2f}</div></div>", unsafe_allow_html=True)
 
 st.divider()
 
-# --- 9. MONITOREO ---
+# --- 9. MONITOREO Y GESTIÓN DE VENTAS ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if not portfolio:
     st.info("Sin posiciones activas.")
@@ -183,27 +174,45 @@ else:
             with st.expander(h_text):
                 c_df, c_btn = st.columns([0.7, 0.3])
                 with c_df:
-                    st.write("**Capas:**")
+                    st.write("**Capas (MXN):**")
                     st.dataframe(pd.DataFrame(info["layers"]), use_container_width=True)
                     st.write(f"**Breakeven USD Sugerido:** `${be_usd:,.2f}`")
                 with c_btn:
-                    if st.button("🗑️ Eliminar", key=f"del_{t}"):
+                    if st.button("🗑️ Eliminar Activo", key=f"del_{t}"):
                         supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                         st.rerun()
                     
-                    with st.expander("📤 Vender"):
+                    st.divider()
+                    with st.expander("📤 Registrar Venta"):
                         with st.form(f"sell_{t}"):
-                            q_s = st.number_input("Títulos", 1, int(info["shares"]))
+                            q_sell = st.number_input("Títulos a Vender", 1, int(info["shares"]))
+                            p_sell_gross = st.number_input("Precio Venta Bruto (MXN)", min_value=0.01)
+                            
                             if st.form_submit_button("Ejecutar Venta"):
-                                avg_g = info["total_gross_cost"] / info["shares"]
-                                avg_n = info["total_net_cost"] / info["shares"]
-                                n_sh = info["shares"] - q_s
-                                if n_sh <= 0:
+                                # 1. Cálculos de Rentabilidad
+                                rev_net = (q_sell * p_sell_gross) * (1 - f_total)
+                                avg_net_cost = info["total_net_cost"] / info["shares"]
+                                cost_net_sold = q_sell * avg_net_cost
+                                pnl_realized = float(rev_net - cost_net_sold)
+                                
+                                # 2. Registrar en Histórico (Tabla Trades)
+                                supabase.table("trades").insert({
+                                    "user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)
+                                }).execute()
+                                
+                                # 3. Actualizar o Eliminar Posición
+                                remaining_shares = info["shares"] - q_sell
+                                if remaining_shares <= 0:
                                     supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                                 else:
+                                    avg_gross_cost = info["total_gross_cost"] / info["shares"]
                                     supabase.table("positions").update({
-                                        "shares": float(n_sh), "total_gross_cost": float(n_sh * avg_g), "total_net_cost": float(n_sh * avg_n)
+                                        "shares": float(remaining_shares),
+                                        "total_gross_cost": float(remaining_shares * avg_gross_cost),
+                                        "total_net_cost": float(remaining_shares * avg_net_cost)
                                     }).eq("id", info["ids"][0]).execute()
+                                
+                                st.success(f"Venta ejecutada. P&L: ${pnl_realized:,.2f}")
                                 st.rerun()
 
 # --- 10. GRÁFICO TÉCNICO ---
