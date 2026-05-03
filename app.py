@@ -16,6 +16,8 @@ st.markdown("""
     .kpi-card { background-color: #1e2130; padding: 20px; border-radius: 10px; border-left: 5px solid #00e1ff; text-align: center; margin-bottom: 10px; }
     .kpi-val { font-size: 26px; font-weight: bold; color: white; }
     .kpi-lbl { font-size: 13px; color: #808495; text-transform: uppercase; letter-spacing: 1px; }
+    
+    /* Clase para el agente flotante según v4.1 */
     .floating-agent { position: fixed; bottom: 20px; right: 20px; z-index: 9999; background: transparent; }
     </style>
     """, unsafe_allow_html=True)
@@ -67,6 +69,7 @@ def get_market_data(ticker):
     df = yf.download(ticker, period="5y", interval="1d", auto_adjust=True, progress=False)
     df = clean_df(df)
     if df is not None:
+        # Indicadores obligatorios v4.1
         df.ta.macd(fast=12, slow=26, signal=9, append=True)
         df.ta.stochrsi(length=14, rsi_length=14, k=3, d=3, append=True)
         df.columns = [c.lower() for c in df.columns]
@@ -74,6 +77,8 @@ def get_market_data(ticker):
 
 # --- 5. CARGA DE DATOS (VERSION 4.1) ---
 user_id = st.session_state.user.id
+fx_now = get_fx_rate() # Corrección de NameError: Definido antes del procesamiento
+
 try:
     res_pos = supabase.table("positions").select("*").eq("user_id", user_id).execute()
     positions_raw = res_pos.data
@@ -97,7 +102,6 @@ for p in positions_raw:
 # --- 6. SIDEBAR: OPERATIVA ---
 with st.sidebar:
     st.title("🛠️ Configuración")
-    fx_now = get_fx_rate()
     st.metric("FX USD/MXN", f"${fx_now:,.4f}")
     comm_pct = st.number_input("Comisión Broker (%)", value=0.25, step=0.01) / 100
     f_total = comm_pct * 1.16
@@ -134,34 +138,75 @@ with k1: st.markdown(f"<div class='kpi-card'><div class='kpi-lbl'>VALOR PORTAFOL
 with k2: st.markdown(f"<div class='kpi-card' style='border-left-color: #00ff88;'><div class='kpi-lbl'>UTILIDAD REALIZADA</div><div class='kpi-val'>${realized_sum:,.2f}</div></div>", unsafe_allow_html=True)
 with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'><div class='kpi-lbl'>PLUSVALIA NETA</div><div class='kpi-val'>${unrealized_net:,.2f}</div></div>", unsafe_allow_html=True)
 
-# --- 9. MONITOREO Y VENTAS ---
+st.divider()
+
+# --- 9. MONITOREO Y VENTAS (RESTAURACIÓN V4.1) ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
-if portfolio:
+if not portfolio:
+    st.info("Sin posiciones activas.")
+else:
     for t, info in portfolio.items():
         if t in active_data:
             m = active_data[t]
             net_pnl = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
             pnl_pct = (net_pnl / info["total_net_cost"]) * 100 if info["total_net_cost"] > 0 else 0
-            h_text = f"{t} | USD: ${m['p_usd']:,.2f} | Real: ${net_pnl:,.2f} ({pnl_pct:+.2f}%)"
+            be_usd = info["total_net_cost"] / (info["shares"] * fx_now * (1 - f_total))
+            status = "🟢" if net_pnl >= 0 else "🔴"
+            weight = (m["v_mkt"] / total_nav) * 100
+            v_d = ((m["p_usd"] / m["prev_usd"]) - 1) * 100
+            
+            # Formato de etiqueta v4.1 (Incluye D/D%)
+            h_text = f"{t} | USD: ${m['p_usd']:,.2f} ({v_d:+.2f}%) | Real: {status} ${net_pnl:,.2f} ({pnl_pct:+.2f}%) | Peso: {weight:.1f}%"
             with st.expander(h_text):
-                st.write(f"Breakeven USD: ${info['total_net_cost']/(info['shares']*fx_now*(1-f_total)):,.2f}")
+                c_df, c_btn = st.columns([0.7, 0.3])
+                with c_df:
+                    st.write("**Capas registradas:**")
+                    st.dataframe(pd.DataFrame(info["layers"]), use_container_width=True)
+                    st.write(f"**Breakeven USD Sugerido:** `${be_usd:,.2f}`")
+                with c_btn:
+                    if st.button("🗑️ Eliminar Activo", key=f"del_{t}"):
+                        supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
+                        st.rerun()
 
-# --- 10. GRÁFICO TÉCNICO (VERSION 4.1) ---
+# --- 10. GRÁFICO TÉCNICO (VERSION 4.1: 4 FILAS + EJE DERECHO) ---
 st.divider()
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=list(portfolio.keys()) if portfolio else ["SOXX"])
 df_t = get_market_data(t_tech)
 if df_t is not None:
+    # Subplots de 4 filas: Precio, Volumen, MACD, Stoch RSI
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.4, 0.15, 0.22, 0.23])
+    
+    # 1. Velas
     fig.add_trace(go.Candlestick(x=df_t.index, open=df_t['open'], high=df_t['high'], low=df_t['low'], close=df_t['close'], name="Precio"), row=1, col=1)
-    k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
-    if k_list:
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[k_list[0]], name="%K", line=dict(color='#00ff88')), row=4, col=1)
-        fig.add_hline(y=80, line_dash="dash", line_color="white", row=4, col=1)
-        fig.add_hline(y=20, line_dash="dash", line_color="white", row=4, col=1)
-    fig.update_layout(height=800, template="plotly_dark", showlegend=False)
-    st.plotly_chart(fig, use_container_width=True)
+    
+    # 2. Volumen (v4.1)
+    v_colors = ['#26a69a' if df_t['close'].iloc[i] >= df_t['open'].iloc[i] else '#ef5350' for i in range(len(df_t))]
+    fig.add_trace(go.Bar(x=df_t.index, y=df_t['volume'], name="Volumen", marker_color=v_colors, opacity=0.8), row=2, col=1)
+    
+    # 3. MACD (v4.1)
+    m_cols = [c for c in df_t.columns if 'macd' in c.lower() and 'h' not in c.lower() and 's' not in c.lower()]
+    s_cols = [c for c in df_t.columns if 'macds' in c.lower()]
+    h_cols = [c for c in df_t.columns if 'macdh' in c.lower()]
+    if m_cols and s_cols:
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_cols[0]], name="MACD", line=dict(color='#00e1ff', width=1.5)), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_cols[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
+        fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_cols[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
 
-# --- 10.5 BLOQUE ESTRATÉGICO: RESUMEN PARA TOBIAS ---
+    # 4. Stoch RSI Niveles 80/20 (v4.1)
+    k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
+    d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
+    if k_list and d_list:
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[k_list[0]], name="%K", line=dict(color='#00ff88', width=1.5)), row=4, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[d_list[0]], name="%D", line=dict(color='#ff4b4b', width=1.5, dash='dot')), row=4, col=1)
+        fig.add_hline(y=80, line_dash="dash", line_color="rgba(255,255,255,0.3)", row=4, col=1)
+        fig.add_hline(y=20, line_dash="dash", line_color="rgba(255,255,255,0.3)", row=4, col=1)
+    
+    # Ejes Y a la Derecha (Restauración v4.1)
+    fig.update_yaxes(side="right", gridcolor="rgba(128,128,128,0.1)")
+    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(l=10, r=60, t=10, b=10))
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
+
+# --- 10.5 BLOQUE ESTRATÉGICO PARA TOBIAS ---
 resumen_dict = {}
 if portfolio:
     for ticker, info in portfolio.items():
@@ -179,15 +224,17 @@ if portfolio:
 else:
     contexto_tobias = "Cartera vacía."
 
-# --- 11. AGENTE FLOTANTE TOBIAS (DYNAMIC VARIABLES) ---
+# --- 11. AGENTE FLOTANTE TOBIAS (VERSIÓN FIX DEFINITIVO) ---
 safe_context = contexto_tobias.replace('"', '\\"')
 tobias_html = f"""
 <div class="floating-agent">
     <elevenlabs-convai 
         agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"
-        dynamic-variables='{{"portfolio_context": "{safe_context}"}}'>
+        dynamic-variables='{{"portfolio_context": "{safe_context}"}}'
+        override-config='{{"launcher": {{"label": "¿Tienes dudas?", "callActionText": "Habla con Tobias, tu asesor de inversión"}}}}'>
     </elevenlabs-convai>
     <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
 </div>
 """
-components.html(tobias_html, height=500)
+# Altura de 170px para evitar el espacio muerto masivo sin recortar el botón
+components.html(tobias_html, height=170)
