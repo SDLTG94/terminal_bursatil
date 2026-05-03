@@ -241,4 +241,4 @@ tobias_html = f"""
     <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
 </div>
 """
-components.html(tobias_html, height=150)
+components.html(tobias_html, height=500)
