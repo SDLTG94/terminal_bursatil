@@ -5,8 +5,7 @@ import pandas_ta as ta
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from supabase import create_client, Client
-from elevenlabs.client import ElevenLabs
-from streamlit_mic_recorder import mic_recorder
+import streamlit.components.v1 as components
 
 # --- 1. CONFIGURACIÓN E INTERFAZ ---
 st.set_page_config(layout="wide", page_title="Institutional Global Terminal", page_icon="🏛️")
@@ -19,32 +18,14 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. MOTOR DE VOZ (ELEVENLABS SDK v1.0+ FIX) ---
-client_voce = ElevenLabs(api_key=st.secrets["ELEVENLABS_API_KEY"])
-
-def hablar_agente(texto):
-    """Genera audio usando la sintaxis correcta del SDK actual y lo reproduce."""
-    try:
-        # En el nuevo SDK, el método es .text_to_speech.convert
-        audio_iterator = client_voce.text_to_speech.convert(
-            voice_id="pC0w7bOSDTlgiOCrNBX3", 
-            text=texto,
-            model_id="eleven_multilingual_v2"
-        )
-        # Convertimos el iterador de bytes en un solo bloque para Streamlit
-        audio_bytes = b"".join(audio_iterator)
-        st.audio(audio_bytes, format="audio/mp3", autoplay=True)
-    except Exception as e:
-        st.error(f"Error de audio: {e}")
-
-# --- 3. CONEXIÓN A SUPABASE ---
+# --- 2. CONEXIÓN A SUPABASE ---
 @st.cache_resource
 def get_supabase():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 supabase = get_supabase()
 
-# --- 4. GESTIÓN DE SESIÓN ---
+# --- 3. GESTIÓN DE SESIÓN ---
 if "user" not in st.session_state:
     st.sidebar.title("🔐 Acceso")
     auth_mode = st.sidebar.radio("Acción:", ["Entrar", "Registrarse"])
@@ -62,10 +43,10 @@ if "user" not in st.session_state:
                 supabase.auth.sign_up({"email": email, "password": password})
                 st.sidebar.success("Registro enviado. Confirma tu correo.")
         except Exception as e:
-            st.sidebar.error(f"Error de acceso: {e}")
+            st.sidebar.error(f"Error: {e}")
     st.stop()
 
-# --- 5. MOTORES DE CÁLCULO ---
+# --- 4. MOTORES DE CÁLCULO ---
 def clean_df(df):
     if df is None or df.empty: return None
     if isinstance(df.columns, pd.MultiIndex):
@@ -91,7 +72,7 @@ def get_market_data(ticker):
         df.columns = [c.lower() for c in df.columns]
     return df
 
-# --- 6. CARGA DE DATOS ---
+# --- 5. CARGA DE DATOS (VERSION 4.1) ---
 user_id = st.session_state.user.id
 
 try:
@@ -113,24 +94,31 @@ for p in positions_raw:
     portfolio[t]["total_net_cost"] += p["total_net_cost"]
     portfolio[t]["ids"].append(p["id"])
     portfolio[t]["layers"].append({
-        "qty": p["shares"], "p_gross": p["total_gross_cost"] / p["shares"] if p["shares"] > 0 else 0, "date": p.get("created_at", "")[:10]
+        "qty": p["shares"], 
+        "p_gross": p["total_gross_cost"] / p["shares"] if p["shares"] > 0 else 0, 
+        "date": p.get("created_at", "")[:10]
     })
 
-# --- 7. SIDEBAR: OPERATIVA Y AGENTE ---
+# --- 6. SIDEBAR: OPERATIVA Y AGENTE TOBIAS ---
 with st.sidebar:
     st.title("🛠️ Configuración")
+    
+    # --- INTEGRACIÓN DEL AGENTE TOBIAS (WIDGET) ---
+    st.subheader("🎙️ Habla con Tobias")
+    # El componente HTML para el widget de ElevenLabs
+    tobias_widget = """
+    <div style="display: flex; justify-content: center; align-items: center; background: #1e2130; border-radius: 10px; padding: 10px; border: 1px solid #3d425a;">
+        <elevenlabs-convai agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"></elevenlabs-convai>
+        <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
+    </div>
+    """
+    components.html(tobias_widget, height=120)
+    
+    st.divider()
     fx_now = get_fx_rate()
     st.metric("FX USD/MXN", f"${fx_now:,.4f}")
     comm_pct = st.number_input("Comisión Broker (%)", value=0.25, step=0.01) / 100
     f_total = comm_pct * 1.16
-
-    st.divider()
-    st.subheader("🎙️ Agente de Apoyo")
-    audio_mic = mic_recorder(start_prompt="Preguntar a Don Bursátil", stop_prompt="Procesar...", key="mic")
-    
-    if audio_mic:
-        # Mensaje de prueba con acento mexicano para validar el fix
-        hablar_agente("¡Qué onda Santiago! Ya quedó el parche. Ahora sí ya te escucho y puedo hablar sin que se me trabe la carreta. ¿Qué onda con ese portafolio?")
 
     st.divider()
     st.subheader("📥 Registro de Capas")
@@ -141,6 +129,7 @@ with st.sidebar:
         t_final = st.text_input("Confirmar Ticker").upper().strip() if t_choice == "Manual" else t_choice
         q_in = st.number_input("Cantidad", min_value=1)
         p_in = st.number_input("Precio Compra Bruto (MXN)", min_value=0.01)
+        
         if st.form_submit_button("Confirmar Compra"):
             if t_final:
                 c_bruto = float(q_in * p_in)
@@ -155,8 +144,7 @@ with st.sidebar:
         del st.session_state.user
         st.rerun()
 
-# --- 8. DASHBOARD KPI ---
-st.title("💼 Terminal de Gestión Patrimonial")
+# --- 7. PROCESAMIENTO DE MERCADO ---
 active_data = {}
 total_nav = 0.0
 for t, info in portfolio.items():
@@ -167,6 +155,8 @@ for t, info in portfolio.items():
         total_nav += v_mkt
         active_data[t] = {"p_usd": p_usd, "v_mkt": v_mkt, "df": df, "prev_usd": float(df['close'].iloc[-2])}
 
+# --- 8. DASHBOARD KPI (VERSION 4.1) ---
+st.title("💼 Terminal de Gestión Patrimonial")
 k1, k2, k3 = st.columns(3)
 unrealized_net = sum((active_data[t]["v_mkt"]*(1-f_total)) - portfolio[t]["total_net_cost"] for t in active_data) if active_data else 0.0
 
@@ -176,7 +166,7 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 9. MONITOREO Y VENTAS ---
+# --- 9. MONITOREO Y VENTAS (VERSION 4.1) ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if not portfolio:
     st.info("Sin posiciones activas.")
@@ -195,6 +185,7 @@ else:
             with st.expander(h_text):
                 c_df, c_btn = st.columns([0.7, 0.3])
                 with c_df:
+                    st.write("**Capas (MXN):**")
                     st.dataframe(pd.DataFrame(info["layers"]), use_container_width=True)
                     st.write(f"**Breakeven USD Sugerido:** `${be_usd:,.2f}`")
                 with c_btn:
@@ -204,18 +195,19 @@ else:
                     st.divider()
                     with st.expander("📤 Registrar Venta"):
                         with st.form(f"sell_{t}"):
-                            q_sell = st.number_input("Títulos", 1, int(info["shares"]))
-                            p_sell_gross = st.number_input("Precio Venta (MXN)", min_value=0.01)
+                            q_sell = st.number_input("Títulos a Vender", 1, int(info["shares"]))
+                            p_sell_gross = st.number_input("Precio Venta Bruto (MXN)", min_value=0.01)
                             if st.form_submit_button("Ejecutar Venta"):
                                 rev_net = (q_sell * p_sell_gross) * (1 - f_total)
                                 avg_net_cost = info["total_net_cost"] / info["shares"]
                                 pnl_realized = float(rev_net - (q_sell * avg_net_cost))
                                 supabase.table("trades").insert({"user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)}).execute()
-                                n_sh = info["shares"] - q_sell
-                                if n_sh <= 0: supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
+                                remaining_shares = info["shares"] - q_sell
+                                if remaining_shares <= 0:
+                                    supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                                 else:
-                                    avg_g = info["total_gross_cost"] / info["shares"]
-                                    supabase.table("positions").update({"shares": float(n_sh), "total_gross_cost": float(n_sh * avg_g), "total_net_cost": float(n_sh * avg_net_cost)}).eq("id", info["ids"][0]).execute()
+                                    avg_gross_cost = info["total_gross_cost"] / info["shares"]
+                                    supabase.table("positions").update({"shares": float(remaining_shares), "total_gross_cost": float(remaining_shares * avg_gross_cost), "total_net_cost": float(remaining_shares * avg_net_cost)}).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
 # --- 10. GRÁFICO TÉCNICO ---
@@ -230,7 +222,6 @@ if df_t is not None:
     v_colors = ['#26a69a' if df_t['close'].iloc[i] >= df_t['open'].iloc[i] else '#ef5350' for i in range(len(df_t))]
     fig.add_trace(go.Bar(x=df_t.index, y=df_t['volume'], name="Volumen", marker_color=v_colors, opacity=0.8), row=2, col=1)
     
-    # MACD e Indicadores
     m_list = [c for c in df_t.columns if 'macd' in c.lower() and 'h' not in c.lower() and 's' not in c.lower()]
     s_list = [c for c in df_t.columns if 'macds' in c.lower()]
     h_list = [c for c in df_t.columns if 'macdh' in c.lower()]
@@ -239,7 +230,6 @@ if df_t is not None:
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
         fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
 
-    # Stoch RSI + Niveles 80/20
     k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
     d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
     if k_list and d_list:

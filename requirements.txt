@@ -5,5 +5,3 @@ pandas
 pandas-ta
 plotly
 streamlit-autorefresh
-elevenlabs
-streamlit-mic-recorder
