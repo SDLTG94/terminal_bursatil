@@ -13,11 +13,15 @@ st.set_page_config(layout="wide", page_title="Institutional Global Terminal", pa
 
 st.markdown("""
     <style>
+    /* Estilos KPI Versión 4.1 */
     .kpi-card { background-color: #1e2130; padding: 20px; border-radius: 10px; border-left: 5px solid #00e1ff; text-align: center; margin-bottom: 10px; }
     .kpi-val { font-size: 26px; font-weight: bold; color: white; }
     .kpi-lbl { font-size: 13px; color: #808495; text-transform: uppercase; letter-spacing: 1px; }
     
-    /* Reducción de márgenes globales para evitar espacios muertos */
+    /* Clase para el agente (basada en tu versión funcional) */
+    .floating-agent { position: fixed; bottom: 20px; right: 20px; z-index: 9999; background: transparent; }
+    
+    /* Reducción de espacio muerto al final */
     .main .block-container { padding-bottom: 0rem; }
     </style>
     """, unsafe_allow_html=True)
@@ -96,7 +100,7 @@ for p in positions_raw:
     portfolio[t]["ids"].append(p["id"])
     portfolio[t]["layers"].append({"qty": p["shares"], "p_gross": p["total_gross_cost"]/p["shares"], "date": p.get("created_at", "")[:10]})
 
-# --- 6. SIDEBAR: OPERATIVA ---
+# --- 6. SIDEBAR: OPERATIVA (VERSION 4.1) ---
 with st.sidebar:
     st.title("🛠️ Configuración")
     fx_now = get_fx_rate()
@@ -138,7 +142,7 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 9. MONITOREO Y VENTAS (VERSION 4.1 COMPLETO) ---
+# --- 9. MONITOREO Y VENTAS (RESTAURACIÓN VERSION 4.1) ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if not portfolio:
     st.info("Sin posiciones activas.")
@@ -182,33 +186,37 @@ else:
                                     supabase.table("positions").update({"shares": float(n_sh), "total_gross_cost": float(n_sh * avg_g), "total_net_cost": float(n_sh * avg_net_cost)}).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
-# --- 10. GRÁFICO TÉCNICO (VERSION 4.1 CON EJE DERECHO) ---
+# --- 10. GRÁFICO TÉCNICO (4 FILAS + EJE DERECHO VERSION 4.1) ---
 st.divider()
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=list(portfolio.keys()) if portfolio else ["SOXX"])
 df_t = get_market_data(t_tech)
 if df_t is not None:
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.4, 0.15, 0.22, 0.23])
+    # Precio
     fig.add_trace(go.Candlestick(x=df_t.index, open=df_t['open'], high=df_t['high'], low=df_t['low'], close=df_t['close'], name="Precio"), row=1, col=1)
+    # Volumen
     v_colors = ['#26a69a' if df_t['close'].iloc[i] >= df_t['open'].iloc[i] else '#ef5350' for i in range(len(df_t))]
     fig.add_trace(go.Bar(x=df_t.index, y=df_t['volume'], name="Volumen", marker_color=v_colors), row=2, col=1)
+    # MACD
     m_list = [c for c in df_t.columns if 'macd' in c.lower() and 'h' not in c.lower() and 's' not in c.lower()]
     s_list = [c for c in df_t.columns if 'macds' in c.lower()]
     h_list = [c for c in df_t.columns if 'macdh' in c.lower()]
     if m_list and s_list:
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_list[0]], name="MACD", line=dict(color='#00e1ff', width=1.5)), row=3, col=1)
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_list[0]], name="MACD", line=dict(color='#00e1ff')), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900')), row=3, col=1)
         fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
+    # Stoch RSI 80/20
     k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
     d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
     if k_list and d_list:
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[k_list[0]], name="%K", line=dict(color='#00ff88', width=1.5)), row=4, col=1)
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[d_list[0]], name="%D", line=dict(color='#ff4b4b', width=1.5, dash='dot')), row=4, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[k_list[0]], name="%K", line=dict(color='#00ff88')), row=4, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[d_list[0]], name="%D", line=dict(color='#ff4b4b', dash='dot')), row=4, col=1)
         fig.add_hline(y=80, line_dash="dash", line_color="white", row=4, col=1)
         fig.add_hline(y=20, line_dash="dash", line_color="white", row=4, col=1)
     
-    # Eje Y a la Derecha (v4.1)
+    # Eje Y a la Derecha e interfaz limpia (V4.1)
     fig.update_yaxes(side="right", gridcolor="rgba(128,128,128,0.1)")
-    fig.update_layout(height=900, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(l=10, r=60, t=10, b=10))
+    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(l=10, r=60, t=10, b=10))
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
 # --- 10.5 BLOQUE ESTRATÉGICO: RESUMEN PARA TOBIAS ---
@@ -229,10 +237,11 @@ if portfolio:
 else:
     contexto_tobias = "Cartera vacía."
 
-# --- 11. AGENTE FLOTANTE TOBIAS (VERSIÓN FIX DEFINITIVO) ---
+# --- 11. AGENTE TOBIAS (FUSIÓN FUNCIONAL + LOCALIZACIÓN) ---
+# He aumentado el height a 250 para asegurar que el botón aparezca sin dejar espacio blanco excesivo
 safe_context = contexto_tobias.replace('"', '\\"')
 tobias_html = f"""
-<div style="position: fixed; bottom: 20px; right: 20px; z-index: 999999;">
+<div class="floating-agent">
     <elevenlabs-convai 
         agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"
         dynamic-variables='{{"portfolio_context": "{safe_context}"}}'
@@ -241,5 +250,4 @@ tobias_html = f"""
     <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
 </div>
 """
-# Height=120 es el mínimo para que el botón sea visible y funcional sin generar huecos
-components.html(tobias_html, height=120)
+components.html(tobias_html, height=250)
