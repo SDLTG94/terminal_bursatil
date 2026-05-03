@@ -5,6 +5,8 @@ import pandas_ta as ta
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from supabase import create_client, Client
+from elevenlabs.client import ElevenLabs
+from streamlit_mic_recorder import mic_recorder
 
 # --- 1. CONFIGURACIÓN E INTERFAZ ---
 st.set_page_config(layout="wide", page_title="Institutional Global Terminal", page_icon="🏛️")
@@ -17,14 +19,30 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CONEXIÓN A SUPABASE ---
+# --- 2. MOTOR DE VOZ (ELEVENLABS) ---
+# Usamos el Voice ID solicitado: pC0w7bOSDTlgiOCrNBX3
+client_voce = ElevenLabs(api_key=st.secrets["ELEVENLABS_API_KEY"])
+
+def hablar_agente(texto):
+    """Genera audio y lo reproduce automáticamente en el dashboard."""
+    try:
+        audio = client_voce.generate(
+            text=texto,
+            voice="pC0w7bOSDTlgiOCrNBX3", 
+            model="eleven_multilingual_v2"
+        )
+        st.audio(audio, format="audio/mp3", autoplay=True)
+    except Exception as e:
+        st.error(f"Error de audio: {e}")
+
+# --- 3. CONEXIÓN A SUPABASE ---
 @st.cache_resource
 def get_supabase():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 supabase = get_supabase()
 
-# --- 3. GESTIÓN DE SESIÓN ---
+# --- 4. GESTIÓN DE SESIÓN (FIX DOBLE CLIC) ---
 if "user" not in st.session_state:
     st.sidebar.title("🔐 Acceso")
     auth_mode = st.sidebar.radio("Acción:", ["Entrar", "Registrarse"])
@@ -42,10 +60,10 @@ if "user" not in st.session_state:
                 supabase.auth.sign_up({"email": email, "password": password})
                 st.sidebar.success("Registro enviado. Confirma tu correo.")
         except Exception as e:
-            st.sidebar.error(f"Error: {e}")
+            st.sidebar.error(f"Error de acceso: {e}")
     st.stop()
 
-# --- 4. MOTORES DE CÁLCULO ---
+# --- 5. MOTORES DE CÁLCULO ---
 def clean_df(df):
     if df is None or df.empty: return None
     if isinstance(df.columns, pd.MultiIndex):
@@ -71,13 +89,18 @@ def get_market_data(ticker):
         df.columns = [c.lower() for c in df.columns]
     return df
 
-# --- 5. CARGA DE DATOS ---
+# --- 6. CARGA DE DATOS (POSICIONES Y UTILIDAD REALIZADA) ---
 user_id = st.session_state.user.id
 
 try:
     res_pos = supabase.table("positions").select("*").eq("user_id", user_id).execute()
     positions_raw = res_pos.data
-except: positions_raw = []
+    # Carga de Utilidad Realizada Histórica (Versión 4.1)
+    res_trades = supabase.table("trades").select("amount").eq("user_id", user_id).execute()
+    realized_sum = sum(item["amount"] for item in res_trades.data)
+except: 
+    positions_raw = []
+    realized_sum = 0.0
 
 portfolio = {}
 for p in positions_raw:
@@ -94,18 +117,22 @@ for p in positions_raw:
         "date": p.get("created_at", "")[:10]
     })
 
-try:
-    res_trades = supabase.table("trades").select("amount").eq("user_id", user_id).execute()
-    realized_sum = sum(item["amount"] for item in res_trades.data)
-except: realized_sum = 0.0
-
-# --- 6. SIDEBAR: OPERATIVA ---
+# --- 7. SIDEBAR: OPERATIVA Y AGENTE ---
 with st.sidebar:
     st.title("🛠️ Configuración")
     fx_now = get_fx_rate()
     st.metric("FX USD/MXN", f"${fx_now:,.4f}")
     comm_pct = st.number_input("Comisión Broker (%)", value=0.25, step=0.01) / 100
     f_total = comm_pct * 1.16
+
+    st.divider()
+    st.subheader("🎙️ Agente de Apoyo")
+    # Capturador de voz
+    audio_mic = mic_recorder(start_prompt="Preguntar a Don Bursátil", stop_prompt="Procesar...", key="mic")
+    
+    if audio_mic:
+        # Respuesta de saludo para validar integración de voz mexicana
+        hablar_agente("¡Qué onda Santiago! Ya te escucho fuerte y claro. Estoy listo para analizar la neta de tu portafolio.")
 
     st.divider()
     st.subheader("📥 Registro de Capas")
@@ -132,7 +159,7 @@ with st.sidebar:
         del st.session_state.user
         st.rerun()
 
-# --- 7. PROCESAMIENTO DE MERCADO ---
+# --- 8. PROCESAMIENTO DE MERCADO ---
 active_data = {}
 total_nav = 0.0
 for t, info in portfolio.items():
@@ -143,7 +170,7 @@ for t, info in portfolio.items():
         total_nav += v_mkt
         active_data[t] = {"p_usd": p_usd, "v_mkt": v_mkt, "df": df, "prev_usd": float(df['close'].iloc[-2])}
 
-# --- 8. DASHBOARD: KPI TILES ---
+# --- 9. DASHBOARD: KPI TILES ---
 st.title("💼 Terminal de Gestión Patrimonial")
 k1, k2, k3 = st.columns(3)
 unrealized_net = sum((active_data[t]["v_mkt"]*(1-f_total)) - portfolio[t]["total_net_cost"] for t in active_data) if active_data else 0.0
@@ -154,7 +181,7 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 9. MONITOREO Y GESTIÓN DE VENTAS (FIX PORCENTAJE NETO) ---
+# --- 10. MONITOREO Y GESTIÓN DE VENTAS ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if not portfolio:
     st.info("Sin posiciones activas.")
@@ -163,7 +190,7 @@ else:
         if t in active_data:
             m = active_data[t]
             net_pnl = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
-            # Cálculo del Porcentaje de Ganancia/Pérdida Neta
+            # Cálculo de Porcentaje Neto (Versión 4.1)
             pnl_pct = (net_pnl / info["total_net_cost"]) * 100 if info["total_net_cost"] > 0 else 0
             
             be_usd = info["total_net_cost"] / (info["shares"] * fx_now * (1 - f_total))
@@ -171,9 +198,8 @@ else:
             weight = (m["v_mkt"] / total_nav) * 100
             v_d = ((m["p_usd"] / m["prev_usd"]) - 1) * 100
             
-            # Encabezado actualizado con porcentaje neto al lado de la utilidad monetaria
+            # Formato de cabecera con PnL Porcentual
             h_text = f"{t} | USD: ${m['p_usd']:,.2f} ({v_d:+.2f}%) | Real: {status} ${net_pnl:,.2f} ({pnl_pct:+.2f}%) | Peso: {weight:.1f}%"
-            
             with st.expander(h_text):
                 c_df, c_btn = st.columns([0.7, 0.3])
                 with c_df:
@@ -213,7 +239,7 @@ else:
                                     }).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
-# --- 10. GRÁFICO TÉCNICO ---
+# --- 11. GRÁFICO TÉCNICO ---
 st.divider()
 t_tech_list = list(portfolio.keys()) if portfolio else ["SOXX", "NVDA", "AAPL"]
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=t_tech_list)
@@ -225,6 +251,7 @@ if df_t is not None:
     v_colors = ['#26a69a' if df_t['close'].iloc[i] >= df_t['open'].iloc[i] else '#ef5350' for i in range(len(df_t))]
     fig.add_trace(go.Bar(x=df_t.index, y=df_t['volume'], name="Volumen", marker_color=v_colors, opacity=0.8), row=2, col=1)
     
+    # MACD e Indicadores
     m_list = [c for c in df_t.columns if 'macd' in c.lower() and 'h' not in c.lower() and 's' not in c.lower()]
     s_list = [c for c in df_t.columns if 'macds' in c.lower()]
     h_list = [c for c in df_t.columns if 'macdh' in c.lower()]
@@ -233,6 +260,7 @@ if df_t is not None:
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
         fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
 
+    # Stoch RSI + Niveles 80/20 (Versión 4.1)
     k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
     d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
     if k_list and d_list:
