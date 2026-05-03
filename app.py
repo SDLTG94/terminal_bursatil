@@ -17,7 +17,6 @@ st.markdown("""
     .kpi-val { font-size: 26px; font-weight: bold; color: white; }
     .kpi-lbl { font-size: 13px; color: #808495; text-transform: uppercase; letter-spacing: 1px; }
     
-    /* Contenedor del Agente Flotante */
     .floating-agent {
         position: fixed;
         bottom: 20px;
@@ -82,7 +81,7 @@ def get_market_data(ticker):
         df.columns = [c.lower() for c in df.columns]
     return df
 
-# --- 5. CARGA DE DATOS (VERSION 4.1) ---
+# --- 5. CARGA DE DATOS (VERSIÓN 4.1 ESTABLE) ---
 user_id = st.session_state.user.id
 
 try:
@@ -152,7 +151,7 @@ for t, info in portfolio.items():
         total_nav += v_mkt
         active_data[t] = {"p_usd": p_usd, "v_mkt": v_mkt, "df": df, "prev_usd": float(df['close'].iloc[-2])}
 
-# --- 8. DASHBOARD KPI (VERSION 4.1) ---
+# --- 8. DASHBOARD KPI (VERSIÓN 4.1) ---
 st.title("💼 Terminal de Gestión Patrimonial")
 k1, k2, k3 = st.columns(3)
 unrealized_net = sum((active_data[t]["v_mkt"]*(1-f_total)) - portfolio[t]["total_net_cost"] for t in active_data) if active_data else 0.0
@@ -191,18 +190,19 @@ else:
                     st.divider()
                     with st.expander("📤 Registrar Venta"):
                         with st.form(f"sell_{t}"):
-                            q_sell = st.number_input("Títulos", 1, int(info["shares"]))
-                            p_sell_gross = st.number_input("Precio Venta (MXN)", min_value=0.01)
+                            q_sell = st.number_input("Títulos a Vender", 1, int(info["shares"]))
+                            p_sell_gross = st.number_input("Precio Venta Bruto (MXN)", min_value=0.01)
                             if st.form_submit_button("Ejecutar Venta"):
                                 rev_net = (q_sell * p_sell_gross) * (1 - f_total)
                                 avg_net_cost = info["total_net_cost"] / info["shares"]
                                 pnl_realized = float(rev_net - (q_sell * avg_net_cost))
                                 supabase.table("trades").insert({"user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)}).execute()
-                                n_sh = info["shares"] - q_sell
-                                if n_sh <= 0: supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
+                                remaining_shares = info["shares"] - q_sell
+                                if remaining_shares <= 0:
+                                    supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                                 else:
-                                    avg_g = info["total_gross_cost"] / info["shares"]
-                                    supabase.table("positions").update({"shares": float(n_sh), "total_gross_cost": float(n_sh * avg_g), "total_net_cost": float(n_sh * avg_net_cost)}).eq("id", info["ids"][0]).execute()
+                                    avg_gross_cost = info["total_gross_cost"] / info["shares"]
+                                    supabase.table("positions").update({"shares": float(remaining_shares), "total_gross_cost": float(remaining_shares * avg_gross_cost), "total_net_cost": float(remaining_shares * avg_net_cost)}).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
 # --- 10. GRÁFICO TÉCNICO ---
@@ -237,20 +237,19 @@ if df_t is not None:
     fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
-# --- 11. PREPARACIÓN DE CONTEXTO Y AGENTE FLOTANTE ---
-portfolio_summary = ""
+# --- 11. CONTEXTO PARA TOBIAS (DYNAMIC VARIABLES) ---
+summary_data = []
 if portfolio:
-    sum_list = []
-    for t, info in portfolio.items():
-        if t in active_data:
-            m = active_data[t]
-            pnl_pct = ((m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]) / info["total_net_cost"] * 100
-            sum_list.append(f"{t}: {int(info['shares'])} títulos, Costo Promedio: ${info['total_net_cost']/info['shares']:.2f}, Rendimiento: {pnl_pct:+.2f}%")
-    portfolio_summary = " | ".join(sum_list)
+    for ticker, data in portfolio.items():
+        if ticker in active_data:
+            m = active_data[ticker]
+            pnl_pct = ((m["v_mkt"] * (1 - f_total)) - data["total_net_cost"]) / data["total_net_cost"] * 100
+            summary_data.append(f"{ticker}: {int(data['shares'])} títulos, Costo Promedio: ${data['total_net_cost']/data['shares']:.2f}, Rendimiento: {pnl_pct:+.2f}%")
+    portfolio_summary = " | ".join(summary_data)
 else:
-    portfolio_summary = "Portafolio vacío."
+    portfolio_summary = "El portafolio está vacío."
 
-# Escapamos comillas para el JSON del widget
+# Escapamos comillas para evitar errores de JSON
 safe_summary = portfolio_summary.replace('"', '\\"')
 
 tobias_floating_html = f"""
