@@ -16,6 +16,9 @@ st.markdown("""
     .kpi-card { background-color: #1e2130; padding: 20px; border-radius: 10px; border-left: 5px solid #00e1ff; text-align: center; margin-bottom: 10px; }
     .kpi-val { font-size: 26px; font-weight: bold; color: white; }
     .kpi-lbl { font-size: 13px; color: #808495; text-transform: uppercase; letter-spacing: 1px; }
+    
+    /* Ajuste para eliminar márgenes innecesarios al final de la página */
+    .main .block-container { padding-bottom: 1rem; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -32,6 +35,7 @@ if "user" not in st.session_state:
     auth_mode = st.sidebar.radio("Acción:", ["Entrar", "Registrarse"])
     email = st.sidebar.text_input("Email")
     password = st.sidebar.text_input("Contraseña", type="password")
+    
     if st.sidebar.button("Confirmar Acceso"):
         try:
             if auth_mode == "Entrar":
@@ -180,7 +184,7 @@ else:
                                     supabase.table("positions").update({"shares": float(n_sh), "total_gross_cost": float(n_sh * avg_g), "total_net_cost": float(n_sh * avg_net_cost)}).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
-# --- 10. GRÁFICO TÉCNICO (EJE DERECHO + 4.1) ---
+# --- 10. GRÁFICO TÉCNICO (V4.1 CON EJE DERECHO) ---
 st.divider()
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=list(portfolio.keys()) if portfolio else ["SOXX"])
 df_t = get_market_data(t_tech)
@@ -189,6 +193,7 @@ if df_t is not None:
     fig.add_trace(go.Candlestick(x=df_t.index, open=df_t['open'], high=df_t['high'], low=df_t['low'], close=df_t['close'], name="Precio"), row=1, col=1)
     v_colors = ['#26a69a' if df_t['close'].iloc[i] >= df_t['open'].iloc[i] else '#ef5350' for i in range(len(df_t))]
     fig.add_trace(go.Bar(x=df_t.index, y=df_t['volume'], name="Volumen", marker_color=v_colors), row=2, col=1)
+    
     m_list = [c for c in df_t.columns if 'macd' in c.lower() and 'h' not in c.lower() and 's' not in c.lower()]
     s_list = [c for c in df_t.columns if 'macds' in c.lower()]
     h_list = [c for c in df_t.columns if 'macdh' in c.lower()]
@@ -196,6 +201,7 @@ if df_t is not None:
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_list[0]], name="MACD", line=dict(color='#00e1ff')), row=3, col=1)
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900')), row=3, col=1)
         fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='gray'), row=3, col=1)
+        
     k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
     d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
     if k_list and d_list:
@@ -203,29 +209,30 @@ if df_t is not None:
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[d_list[0]], name="%D", line=dict(color='#ff4b4b', dash='dot')), row=4, col=1)
         fig.add_hline(y=80, line_dash="dash", line_color="white", row=4, col=1)
         fig.add_hline(y=20, line_dash="dash", line_color="white", row=4, col=1)
-    
-    # Eje Y a la derecha (Cambio solicitado)
+        
+    # Eje Y a la derecha (V4.1)
     fig.update_yaxes(side="right", gridcolor="rgba(128,128,128,0.1)")
     fig.update_layout(height=900, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(l=10, r=60, t=10, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
-# --- 11. TOBIAS: WIDGET FLOTANTE (FIX VISIBILIDAD) ---
-summary_data = []
+# --- 11. TOBIAS: WIDGET FLOTANTE (RESTAURACIÓN FUNCIONAL) ---
+resumen_data = []
 if portfolio:
     for ticker, info in portfolio.items():
         if ticker in active_data:
             m = active_data[ticker]
-            p_n = ((m["v_mkt"]*(1-f_total)) - info["total_net_cost"]) / info["total_net_cost"] * 100
-            summary_data.append(f"{ticker}: {int(info['shares'])} títulos, costo ${info['total_net_cost']/info['shares']:.2f}, retorno {p_n:+.2f}%")
-    contexto_tobias = " | ".join(summary_data)
+            pnl_p = ((m["v_mkt"]*(1-f_total)) - info["total_net_cost"]) / info["total_net_cost"] * 100
+            resumen_data.append(f"{ticker}: {int(info['shares'])} títulos, costo ${info['total_net_cost']/info['shares']:.2f}, retorno {pnl_p:+.2f}%")
+    contexto_final = " | ".join(resumen_data)
 else:
-    contexto_tobias = "Sin posiciones."
+    contexto_final = "Cartera vacía."
 
-safe_context = contexto_tobias.replace('"', '\\"')
+safe_context = contexto_final.replace('"', '\\"')
 
-# Colocamos el widget en un componente de altura controlada al final
+# Para que el widget aparezca, debe estar en un contenedor fijo con altura suficiente para el botón
+# pero el height del component de Streamlit debe ser mayor a 0. Usamos 150px para el botón.
 tobias_html = f"""
-<div style="position: fixed; bottom: 20px; right: 20px; z-index: 999999;">
+<div style="position: fixed; bottom: 10px; right: 10px; z-index: 999999;">
     <elevenlabs-convai 
         agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"
         dynamic-variables='{{"portfolio_context": "{safe_context}"}}'
@@ -234,5 +241,4 @@ tobias_html = f"""
     <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
 </div>
 """
-# Height=100 asegura que el botón sea visible sin crear espacio muerto masivo
-components.html(tobias_html, height=100)
+components.html(tobias_html, height=150)
