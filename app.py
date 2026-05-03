@@ -71,10 +71,9 @@ def get_market_data(ticker):
         df.columns = [c.lower() for c in df.columns]
     return df
 
-# --- 5. CARGA DE DATOS (Posiciones y Utilidad Realizada) ---
+# --- 5. CARGA DE DATOS ---
 user_id = st.session_state.user.id
 
-# Carga de Posiciones Activas
 try:
     res_pos = supabase.table("positions").select("*").eq("user_id", user_id).execute()
     positions_raw = res_pos.data
@@ -95,19 +94,18 @@ for p in positions_raw:
         "date": p.get("created_at", "")[:10]
     })
 
-# Carga de Utilidad Realizada Histórica
 try:
     res_trades = supabase.table("trades").select("amount").eq("user_id", user_id).execute()
     realized_sum = sum(item["amount"] for item in res_trades.data)
 except: realized_sum = 0.0
 
-# --- 6. SIDEBAR: REGISTRO DE COMPRAS ---
+# --- 6. SIDEBAR: OPERATIVA ---
 with st.sidebar:
     st.title("🛠️ Configuración")
     fx_now = get_fx_rate()
     st.metric("FX USD/MXN", f"${fx_now:,.4f}")
     comm_pct = st.number_input("Comisión Broker (%)", value=0.25, step=0.01) / 100
-    f_total = comm_pct * 1.16 # IVA incluido
+    f_total = comm_pct * 1.16
 
     st.divider()
     st.subheader("📥 Registro de Capas")
@@ -156,7 +154,7 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 9. MONITOREO Y GESTIÓN DE VENTAS ---
+# --- 9. MONITOREO Y GESTIÓN DE VENTAS (FIX PORCENTAJE NETO) ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if not portfolio:
     st.info("Sin posiciones activas.")
@@ -165,12 +163,17 @@ else:
         if t in active_data:
             m = active_data[t]
             net_pnl = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
+            # Cálculo del Porcentaje de Ganancia/Pérdida Neta
+            pnl_pct = (net_pnl / info["total_net_cost"]) * 100 if info["total_net_cost"] > 0 else 0
+            
             be_usd = info["total_net_cost"] / (info["shares"] * fx_now * (1 - f_total))
             status = "🟢" if net_pnl >= 0 else "🔴"
             weight = (m["v_mkt"] / total_nav) * 100
             v_d = ((m["p_usd"] / m["prev_usd"]) - 1) * 100
             
-            h_text = f"{t} | USD: ${m['p_usd']:,.2f} ({v_d:+.2f}%) | Real: {status} ${net_pnl:,.2f} | Peso: {weight:.1f}%"
+            # Encabezado actualizado con porcentaje neto al lado de la utilidad monetaria
+            h_text = f"{t} | USD: ${m['p_usd']:,.2f} ({v_d:+.2f}%) | Real: {status} ${net_pnl:,.2f} ({pnl_pct:+.2f}%) | Peso: {weight:.1f}%"
+            
             with st.expander(h_text):
                 c_df, c_btn = st.columns([0.7, 0.3])
                 with c_df:
@@ -189,18 +192,15 @@ else:
                             p_sell_gross = st.number_input("Precio Venta Bruto (MXN)", min_value=0.01)
                             
                             if st.form_submit_button("Ejecutar Venta"):
-                                # 1. Cálculos de Rentabilidad
                                 rev_net = (q_sell * p_sell_gross) * (1 - f_total)
                                 avg_net_cost = info["total_net_cost"] / info["shares"]
                                 cost_net_sold = q_sell * avg_net_cost
                                 pnl_realized = float(rev_net - cost_net_sold)
                                 
-                                # 2. Registrar en Histórico (Tabla Trades)
                                 supabase.table("trades").insert({
                                     "user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)
                                 }).execute()
                                 
-                                # 3. Actualizar o Eliminar Posición
                                 remaining_shares = info["shares"] - q_sell
                                 if remaining_shares <= 0:
                                     supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
@@ -211,8 +211,6 @@ else:
                                         "total_gross_cost": float(remaining_shares * avg_gross_cost),
                                         "total_net_cost": float(remaining_shares * avg_net_cost)
                                     }).eq("id", info["ids"][0]).execute()
-                                
-                                st.success(f"Venta ejecutada. P&L: ${pnl_realized:,.2f}")
                                 st.rerun()
 
 # --- 10. GRÁFICO TÉCNICO ---
