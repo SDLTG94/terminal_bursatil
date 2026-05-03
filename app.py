@@ -19,19 +19,21 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. MOTOR DE VOZ (ELEVENLABS) ---
-# Usamos el Voice ID solicitado: pC0w7bOSDTlgiOCrNBX3
+# --- 2. MOTOR DE VOZ (ELEVENLABS SDK v1.0+ FIX) ---
 client_voce = ElevenLabs(api_key=st.secrets["ELEVENLABS_API_KEY"])
 
 def hablar_agente(texto):
-    """Genera audio y lo reproduce automáticamente en el dashboard."""
+    """Genera audio usando la sintaxis correcta del SDK actual y lo reproduce."""
     try:
-        audio = client_voce.generate(
+        # En el nuevo SDK, el método es .text_to_speech.convert
+        audio_iterator = client_voce.text_to_speech.convert(
+            voice_id="pC0w7bOSDTlgiOCrNBX3", 
             text=texto,
-            voice="pC0w7bOSDTlgiOCrNBX3", 
-            model="eleven_multilingual_v2"
+            model_id="eleven_multilingual_v2"
         )
-        st.audio(audio, format="audio/mp3", autoplay=True)
+        # Convertimos el iterador de bytes en un solo bloque para Streamlit
+        audio_bytes = b"".join(audio_iterator)
+        st.audio(audio_bytes, format="audio/mp3", autoplay=True)
     except Exception as e:
         st.error(f"Error de audio: {e}")
 
@@ -42,7 +44,7 @@ def get_supabase():
 
 supabase = get_supabase()
 
-# --- 4. GESTIÓN DE SESIÓN (FIX DOBLE CLIC) ---
+# --- 4. GESTIÓN DE SESIÓN ---
 if "user" not in st.session_state:
     st.sidebar.title("🔐 Acceso")
     auth_mode = st.sidebar.radio("Acción:", ["Entrar", "Registrarse"])
@@ -89,13 +91,12 @@ def get_market_data(ticker):
         df.columns = [c.lower() for c in df.columns]
     return df
 
-# --- 6. CARGA DE DATOS (POSICIONES Y UTILIDAD REALIZADA) ---
+# --- 6. CARGA DE DATOS ---
 user_id = st.session_state.user.id
 
 try:
     res_pos = supabase.table("positions").select("*").eq("user_id", user_id).execute()
     positions_raw = res_pos.data
-    # Carga de Utilidad Realizada Histórica (Versión 4.1)
     res_trades = supabase.table("trades").select("amount").eq("user_id", user_id).execute()
     realized_sum = sum(item["amount"] for item in res_trades.data)
 except: 
@@ -112,9 +113,7 @@ for p in positions_raw:
     portfolio[t]["total_net_cost"] += p["total_net_cost"]
     portfolio[t]["ids"].append(p["id"])
     portfolio[t]["layers"].append({
-        "qty": p["shares"], 
-        "p_gross": p["total_gross_cost"] / p["shares"] if p["shares"] > 0 else 0, 
-        "date": p.get("created_at", "")[:10]
+        "qty": p["shares"], "p_gross": p["total_gross_cost"] / p["shares"] if p["shares"] > 0 else 0, "date": p.get("created_at", "")[:10]
     })
 
 # --- 7. SIDEBAR: OPERATIVA Y AGENTE ---
@@ -127,12 +126,11 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🎙️ Agente de Apoyo")
-    # Capturador de voz
     audio_mic = mic_recorder(start_prompt="Preguntar a Don Bursátil", stop_prompt="Procesar...", key="mic")
     
     if audio_mic:
-        # Respuesta de saludo para validar integración de voz mexicana
-        hablar_agente("¡Qué onda Santiago! Ya te escucho fuerte y claro. Estoy listo para analizar la neta de tu portafolio.")
+        # Mensaje de prueba con acento mexicano para validar el fix
+        hablar_agente("¡Qué onda Santiago! Ya quedó el parche. Ahora sí ya te escucho y puedo hablar sin que se me trabe la carreta. ¿Qué onda con ese portafolio?")
 
     st.divider()
     st.subheader("📥 Registro de Capas")
@@ -143,10 +141,8 @@ with st.sidebar:
         t_final = st.text_input("Confirmar Ticker").upper().strip() if t_choice == "Manual" else t_choice
         q_in = st.number_input("Cantidad", min_value=1)
         p_in = st.number_input("Precio Compra Bruto (MXN)", min_value=0.01)
-        
         if st.form_submit_button("Confirmar Compra"):
-            if not t_final: st.error("Ticker no definido.")
-            else:
+            if t_final:
                 c_bruto = float(q_in * p_in)
                 c_neto = float(c_bruto * (1 + f_total))
                 supabase.table("positions").insert({
@@ -159,7 +155,8 @@ with st.sidebar:
         del st.session_state.user
         st.rerun()
 
-# --- 8. PROCESAMIENTO DE MERCADO ---
+# --- 8. DASHBOARD KPI ---
+st.title("💼 Terminal de Gestión Patrimonial")
 active_data = {}
 total_nav = 0.0
 for t, info in portfolio.items():
@@ -170,8 +167,6 @@ for t, info in portfolio.items():
         total_nav += v_mkt
         active_data[t] = {"p_usd": p_usd, "v_mkt": v_mkt, "df": df, "prev_usd": float(df['close'].iloc[-2])}
 
-# --- 9. DASHBOARD: KPI TILES ---
-st.title("💼 Terminal de Gestión Patrimonial")
 k1, k2, k3 = st.columns(3)
 unrealized_net = sum((active_data[t]["v_mkt"]*(1-f_total)) - portfolio[t]["total_net_cost"] for t in active_data) if active_data else 0.0
 
@@ -181,7 +176,7 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 10. MONITOREO Y GESTIÓN DE VENTAS ---
+# --- 9. MONITOREO Y VENTAS ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if not portfolio:
     st.info("Sin posiciones activas.")
@@ -190,56 +185,40 @@ else:
         if t in active_data:
             m = active_data[t]
             net_pnl = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
-            # Cálculo de Porcentaje Neto (Versión 4.1)
             pnl_pct = (net_pnl / info["total_net_cost"]) * 100 if info["total_net_cost"] > 0 else 0
-            
             be_usd = info["total_net_cost"] / (info["shares"] * fx_now * (1 - f_total))
             status = "🟢" if net_pnl >= 0 else "🔴"
             weight = (m["v_mkt"] / total_nav) * 100
             v_d = ((m["p_usd"] / m["prev_usd"]) - 1) * 100
             
-            # Formato de cabecera con PnL Porcentual
             h_text = f"{t} | USD: ${m['p_usd']:,.2f} ({v_d:+.2f}%) | Real: {status} ${net_pnl:,.2f} ({pnl_pct:+.2f}%) | Peso: {weight:.1f}%"
             with st.expander(h_text):
                 c_df, c_btn = st.columns([0.7, 0.3])
                 with c_df:
-                    st.write("**Capas (MXN):**")
                     st.dataframe(pd.DataFrame(info["layers"]), use_container_width=True)
                     st.write(f"**Breakeven USD Sugerido:** `${be_usd:,.2f}`")
                 with c_btn:
                     if st.button("🗑️ Eliminar Activo", key=f"del_{t}"):
                         supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                         st.rerun()
-                    
                     st.divider()
                     with st.expander("📤 Registrar Venta"):
                         with st.form(f"sell_{t}"):
-                            q_sell = st.number_input("Títulos a Vender", 1, int(info["shares"]))
-                            p_sell_gross = st.number_input("Precio Venta Bruto (MXN)", min_value=0.01)
-                            
+                            q_sell = st.number_input("Títulos", 1, int(info["shares"]))
+                            p_sell_gross = st.number_input("Precio Venta (MXN)", min_value=0.01)
                             if st.form_submit_button("Ejecutar Venta"):
                                 rev_net = (q_sell * p_sell_gross) * (1 - f_total)
                                 avg_net_cost = info["total_net_cost"] / info["shares"]
-                                cost_net_sold = q_sell * avg_net_cost
-                                pnl_realized = float(rev_net - cost_net_sold)
-                                
-                                supabase.table("trades").insert({
-                                    "user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)
-                                }).execute()
-                                
-                                remaining_shares = info["shares"] - q_sell
-                                if remaining_shares <= 0:
-                                    supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
+                                pnl_realized = float(rev_net - (q_sell * avg_net_cost))
+                                supabase.table("trades").insert({"user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)}).execute()
+                                n_sh = info["shares"] - q_sell
+                                if n_sh <= 0: supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                                 else:
-                                    avg_gross_cost = info["total_gross_cost"] / info["shares"]
-                                    supabase.table("positions").update({
-                                        "shares": float(remaining_shares),
-                                        "total_gross_cost": float(remaining_shares * avg_gross_cost),
-                                        "total_net_cost": float(remaining_shares * avg_net_cost)
-                                    }).eq("id", info["ids"][0]).execute()
+                                    avg_g = info["total_gross_cost"] / info["shares"]
+                                    supabase.table("positions").update({"shares": float(n_sh), "total_gross_cost": float(n_sh * avg_g), "total_net_cost": float(n_sh * avg_net_cost)}).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
-# --- 11. GRÁFICO TÉCNICO ---
+# --- 10. GRÁFICO TÉCNICO ---
 st.divider()
 t_tech_list = list(portfolio.keys()) if portfolio else ["SOXX", "NVDA", "AAPL"]
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=t_tech_list)
@@ -260,7 +239,7 @@ if df_t is not None:
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
         fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
 
-    # Stoch RSI + Niveles 80/20 (Versión 4.1)
+    # Stoch RSI + Niveles 80/20
     k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
     d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
     if k_list and d_list:
