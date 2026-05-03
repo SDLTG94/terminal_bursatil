@@ -6,11 +6,11 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from supabase import create_client, Client
 import streamlit.components.v1 as components
+import json
 
 # --- 1. CONFIGURACIÓN E INTERFAZ ---
 st.set_page_config(layout="wide", page_title="Institutional Global Terminal", page_icon="🏛️")
 
-# Inyección de CSS para KPIs y el Botón Flotante de Tobias
 st.markdown("""
     <style>
     .kpi-card { background-color: #1e2130; padding: 20px; border-radius: 10px; border-left: 5px solid #00e1ff; text-align: center; margin-bottom: 10px; }
@@ -88,7 +88,6 @@ user_id = st.session_state.user.id
 try:
     res_pos = supabase.table("positions").select("*").eq("user_id", user_id).execute()
     positions_raw = res_pos.data
-    # Sumatoria de Utilidad Realizada desde tabla trades (v4.1)
     res_trades = supabase.table("trades").select("amount").eq("user_id", user_id).execute()
     realized_sum = sum(item["amount"] for item in res_trades.data)
 except: 
@@ -164,7 +163,7 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 9. MONITOREO Y VENTAS (VERSION 4.1) ---
+# --- 9. MONITOREO Y VENTAS ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if not portfolio:
     st.info("Sin posiciones activas.")
@@ -173,7 +172,6 @@ else:
         if t in active_data:
             m = active_data[t]
             net_pnl = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
-            # Porcentaje Neto real considerando comisiones (v4.1)
             pnl_pct = (net_pnl / info["total_net_cost"]) * 100 if info["total_net_cost"] > 0 else 0
             be_usd = info["total_net_cost"] / (info["shares"] * fx_now * (1 - f_total))
             status = "🟢" if net_pnl >= 0 else "🔴"
@@ -184,7 +182,6 @@ else:
             with st.expander(h_text):
                 c_df, c_btn = st.columns([0.7, 0.3])
                 with c_df:
-                    st.write("**Capas (MXN):**")
                     st.dataframe(pd.DataFrame(info["layers"]), use_container_width=True)
                     st.write(f"**Breakeven USD Sugerido:** `${be_usd:,.2f}`")
                 with c_btn:
@@ -194,22 +191,21 @@ else:
                     st.divider()
                     with st.expander("📤 Registrar Venta"):
                         with st.form(f"sell_{t}"):
-                            q_sell = st.number_input("Títulos a Vender", 1, int(info["shares"]))
-                            p_sell_gross = st.number_input("Precio Venta Bruto (MXN)", min_value=0.01)
+                            q_sell = st.number_input("Títulos", 1, int(info["shares"]))
+                            p_sell_gross = st.number_input("Precio Venta (MXN)", min_value=0.01)
                             if st.form_submit_button("Ejecutar Venta"):
                                 rev_net = (q_sell * p_sell_gross) * (1 - f_total)
                                 avg_net_cost = info["total_net_cost"] / info["shares"]
                                 pnl_realized = float(rev_net - (q_sell * avg_net_cost))
                                 supabase.table("trades").insert({"user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)}).execute()
-                                remaining_shares = info["shares"] - q_sell
-                                if remaining_shares <= 0:
-                                    supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
+                                n_sh = info["shares"] - q_sell
+                                if n_sh <= 0: supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                                 else:
-                                    avg_gross_cost = info["total_gross_cost"] / info["shares"]
-                                    supabase.table("positions").update({"shares": float(remaining_shares), "total_gross_cost": float(remaining_shares * avg_gross_cost), "total_net_cost": float(remaining_shares * avg_net_cost)}).eq("id", info["ids"][0]).execute()
+                                    avg_g = info["total_gross_cost"] / info["shares"]
+                                    supabase.table("positions").update({"shares": float(n_sh), "total_gross_cost": float(n_sh * avg_g), "total_net_cost": float(n_sh * avg_net_cost)}).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
-# --- 10. GRÁFICO TÉCNICO (VERSION 4.1) ---
+# --- 10. GRÁFICO TÉCNICO ---
 st.divider()
 t_tech_list = list(portfolio.keys()) if portfolio else ["SOXX", "NVDA", "AAPL"]
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=t_tech_list)
@@ -229,7 +225,6 @@ if df_t is not None:
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
         fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
 
-    # Stoch RSI con niveles institucionales 80/20 (v4.1)
     k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
     d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
     if k_list and d_list:
@@ -242,13 +237,29 @@ if df_t is not None:
     fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
-# --- 11. AGENTE FLOTANTE TOBIAS (NUEVO) ---
-# Inyectamos el widget como un componente fijo en la pantalla
-tobias_floating_html = """
+# --- 11. PREPARACIÓN DE CONTEXTO Y AGENTE FLOTANTE ---
+portfolio_summary = ""
+if portfolio:
+    sum_list = []
+    for t, info in portfolio.items():
+        if t in active_data:
+            m = active_data[t]
+            pnl_pct = ((m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]) / info["total_net_cost"] * 100
+            sum_list.append(f"{t}: {int(info['shares'])} títulos, Costo Promedio: ${info['total_net_cost']/info['shares']:.2f}, Rendimiento: {pnl_pct:+.2f}%")
+    portfolio_summary = " | ".join(sum_list)
+else:
+    portfolio_summary = "Portafolio vacío."
+
+# Escapamos comillas para el JSON del widget
+safe_summary = portfolio_summary.replace('"', '\\"')
+
+tobias_floating_html = f"""
 <div class="floating-agent">
-    <elevenlabs-convai agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"></elevenlabs-convai>
+    <elevenlabs-convai 
+        agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"
+        dynamic-variables='{{"portfolio_context": "{safe_summary}"}}'>
+    </elevenlabs-convai>
     <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
 </div>
 """
-# Usamos un height grande para que el widget se despliegue hacia arriba sin cortarse
 components.html(tobias_floating_html, height=500)
