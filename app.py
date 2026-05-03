@@ -16,9 +16,7 @@ st.markdown("""
     .kpi-card { background-color: #1e2130; padding: 20px; border-radius: 10px; border-left: 5px solid #00e1ff; text-align: center; margin-bottom: 10px; }
     .kpi-val { font-size: 26px; font-weight: bold; color: white; }
     .kpi-lbl { font-size: 13px; color: #808495; text-transform: uppercase; letter-spacing: 1px; }
-    
-    /* Ajuste para eliminar márgenes innecesarios al final de la página */
-    .main .block-container { padding-bottom: 1rem; }
+    .floating-agent { position: fixed; bottom: 20px; right: 20px; z-index: 9999; background: transparent; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -35,7 +33,6 @@ if "user" not in st.session_state:
     auth_mode = st.sidebar.radio("Acción:", ["Entrar", "Registrarse"])
     email = st.sidebar.text_input("Email")
     password = st.sidebar.text_input("Contraseña", type="password")
-    
     if st.sidebar.button("Confirmar Acceso"):
         try:
             if auth_mode == "Entrar":
@@ -50,11 +47,10 @@ if "user" not in st.session_state:
             st.sidebar.error(f"Error: {e}")
     st.stop()
 
-# --- 4. MOTORES DE CÁLCULO (STRICT V4.1) ---
+# --- 4. MOTORES DE CÁLCULO ---
 def clean_df(df):
     if df is None or df.empty: return None
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     df.columns = [str(col).lower().strip() for col in df.columns]
     return df
 
@@ -76,7 +72,7 @@ def get_market_data(ticker):
         df.columns = [c.lower() for c in df.columns]
     return df
 
-# --- 5. CARGA DE DATOS ---
+# --- 5. CARGA DE DATOS (VERSION 4.1) ---
 user_id = st.session_state.user.id
 try:
     res_pos = supabase.table("positions").select("*").eq("user_id", user_id).execute()
@@ -130,7 +126,7 @@ for t, info in portfolio.items():
         total_nav += v_mkt
         active_data[t] = {"p_usd": p_usd, "v_mkt": v_mkt, "df": df, "prev_usd": float(df['close'].iloc[-2])}
 
-# --- 8. DASHBOARD KPI (STRICT V4.1) ---
+# --- 8. DASHBOARD KPI (VERSION 4.1) ---
 st.title("💼 Terminal de Gestión Patrimonial")
 k1, k2, k3 = st.columns(3)
 unrealized_net = sum((active_data[t]["v_mkt"]*(1-f_total)) - portfolio[t]["total_net_cost"] for t in active_data) if active_data else 0.0
@@ -140,7 +136,7 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 9. MONITOREO Y VENTAS (STRICT V4.1) ---
+# --- 9. MONITOREO Y VENTAS (VERSION 4.1 DETALLADO) ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if not portfolio:
     st.info("Sin posiciones activas.")
@@ -184,55 +180,61 @@ else:
                                     supabase.table("positions").update({"shares": float(n_sh), "total_gross_cost": float(n_sh * avg_g), "total_net_cost": float(n_sh * avg_net_cost)}).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
-# --- 10. GRÁFICO TÉCNICO (V4.1 CON EJE DERECHO) ---
+# --- 10. GRÁFICO TÉCNICO (VERSION 4.1 CON EJE DERECHO) ---
 st.divider()
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=list(portfolio.keys()) if portfolio else ["SOXX"])
 df_t = get_market_data(t_tech)
 if df_t is not None:
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.4, 0.15, 0.22, 0.23])
+    # 1. Velas
     fig.add_trace(go.Candlestick(x=df_t.index, open=df_t['open'], high=df_t['high'], low=df_t['low'], close=df_t['close'], name="Precio"), row=1, col=1)
+    # 2. Volumen
     v_colors = ['#26a69a' if df_t['close'].iloc[i] >= df_t['open'].iloc[i] else '#ef5350' for i in range(len(df_t))]
-    fig.add_trace(go.Bar(x=df_t.index, y=df_t['volume'], name="Volumen", marker_color=v_colors), row=2, col=1)
-    
+    fig.add_trace(go.Bar(x=df_t.index, y=df_t['volume'], name="Volumen", marker_color=v_colors, opacity=0.8), row=2, col=1)
+    # 3. MACD
     m_list = [c for c in df_t.columns if 'macd' in c.lower() and 'h' not in c.lower() and 's' not in c.lower()]
     s_list = [c for c in df_t.columns if 'macds' in c.lower()]
     h_list = [c for c in df_t.columns if 'macdh' in c.lower()]
     if m_list and s_list:
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_list[0]], name="MACD", line=dict(color='#00e1ff')), row=3, col=1)
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900')), row=3, col=1)
-        fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='gray'), row=3, col=1)
-        
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_list[0]], name="MACD", line=dict(color='#00e1ff', width=1.5)), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
+        fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
+    # 4. Stoch RSI 80/20
     k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
     d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
     if k_list and d_list:
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[k_list[0]], name="%K", line=dict(color='#00ff88')), row=4, col=1)
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[d_list[0]], name="%D", line=dict(color='#ff4b4b', dash='dot')), row=4, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[k_list[0]], name="%K", line=dict(color='#00ff88', width=1.5)), row=4, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[d_list[0]], name="%D", line=dict(color='#ff4b4b', width=1.5, dash='dot')), row=4, col=1)
         fig.add_hline(y=80, line_dash="dash", line_color="white", row=4, col=1)
         fig.add_hline(y=20, line_dash="dash", line_color="white", row=4, col=1)
-        
-    # Eje Y a la derecha (V4.1)
+    
+    # Configuración de Ejes Y a la Derecha (v4.1)
     fig.update_yaxes(side="right", gridcolor="rgba(128,128,128,0.1)")
-    fig.update_layout(height=900, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(l=10, r=60, t=10, b=10))
-    st.plotly_chart(fig, use_container_width=True)
+    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(l=10, r=60, t=10, b=10))
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
-# --- 11. TOBIAS: WIDGET FLOTANTE (RESTAURACIÓN FUNCIONAL) ---
-resumen_data = []
+# --- 10.5 BLOQUE ESTRATÉGICO: RESUMEN PARA TOBIAS ---
+resumen_dict = {}
 if portfolio:
     for ticker, info in portfolio.items():
         if ticker in active_data:
             m = active_data[ticker]
-            pnl_p = ((m["v_mkt"]*(1-f_total)) - info["total_net_cost"]) / info["total_net_cost"] * 100
-            resumen_data.append(f"{ticker}: {int(info['shares'])} títulos, costo ${info['total_net_cost']/info['shares']:.2f}, retorno {pnl_p:+.2f}%")
-    contexto_final = " | ".join(resumen_data)
+            pnl_neto = ((m["v_mkt"] * (1 - f_total)) - info["total_net_cost"])
+            pnl_pct = (pnl_neto / info["total_net_cost"]) * 100 if info["total_net_cost"] > 0 else 0
+            resumen_dict[ticker] = {
+                "títulos": int(info['shares']),
+                "costo_promedio_mxn": round(info['total_net_cost']/info['shares'], 2),
+                "rendimiento_neto_pct": f"{pnl_pct:+.2f}%",
+                "precio_actual_usd": round(m['p_usd'], 2)
+            }
+    contexto_tobias = json.dumps(resumen_dict)
 else:
-    contexto_final = "Cartera vacía."
+    contexto_tobias = "Cartera vacía."
 
-safe_context = contexto_final.replace('"', '\\"')
-
-# Para que el widget aparezca, debe estar en un contenedor fijo con altura suficiente para el botón
-# pero el height del component de Streamlit debe ser mayor a 0. Usamos 150px para el botón.
+# --- 11. AGENTE FLOTANTE TOBIAS (VERSIÓN ESTABLE + LABELS) ---
+safe_context = contexto_tobias.replace('"', '\\"')
 tobias_html = f"""
-<div style="position: fixed; bottom: 10px; right: 10px; z-index: 999999;">
+<div class="floating-agent">
     <elevenlabs-convai 
         agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"
         dynamic-variables='{{"portfolio_context": "{safe_context}"}}'
@@ -241,4 +243,5 @@ tobias_html = f"""
     <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
 </div>
 """
-components.html(tobias_html, height=500)
+# El height de 170px permite que la burbuja se inicialice correctamente sin dejar espacio masivo
+components.html(tobias_html, height=170)
