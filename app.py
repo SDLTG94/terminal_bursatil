@@ -46,7 +46,7 @@ if "user" not in st.session_state:
             st.sidebar.error(f"Error: {e}")
     st.stop()
 
-# --- 4. MOTORES DE CÁLCULO (VERSION 4.1) ---
+# --- 4. MOTORES DE CÁLCULO ---
 def clean_df(df):
     if df is None or df.empty: return None
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
@@ -73,6 +73,8 @@ def get_market_data(ticker):
 
 # --- 5. CARGA DE DATOS (VERSION 4.1) ---
 user_id = st.session_state.user.id
+fx_now = get_fx_rate() # DEFINICIÓN PREVIA PARA EVITAR EL NAMEERROR
+
 try:
     res_pos = supabase.table("positions").select("*").eq("user_id", user_id).execute()
     positions_raw = res_pos.data
@@ -104,10 +106,9 @@ for t, info in portfolio.items():
         total_nav += v_mkt
         active_data[t] = {"p_usd": p_usd, "v_mkt": v_mkt, "df": df, "prev_usd": float(df['close'].iloc[-2])}
 
-# --- 7. SIDEBAR: OPERATIVA Y TOBIAS (NUEVA UBICACIÓN) ---
+# --- 7. SIDEBAR: OPERATIVA Y TOBIAS ---
 with st.sidebar:
     st.title("🛠️ Configuración")
-    fx_now = get_fx_rate()
     st.metric("FX USD/MXN", f"${fx_now:,.4f}")
     comm_pct = st.number_input("Comisión Broker (%)", value=0.25, step=0.01) / 100
     f_total = comm_pct * 1.16
@@ -124,7 +125,7 @@ with st.sidebar:
     
     st.divider()
     
-    # --- INTEGRACIÓN DE TOBIAS EN EL SIDEBAR ---
+    # CONTEXTO DINÁMICO PARA TOBIAS
     resumen_data = []
     if portfolio:
         for ticker, data in portfolio.items():
@@ -138,7 +139,7 @@ with st.sidebar:
 
     safe_context = contexto_tobias.replace('"', '\\"')
     
-    # El widget se renderiza estáticamente dentro del sidebar
+    # WIDGET TOBIAS LOCALIZADO
     tobias_widget = f"""
     <div style="display: flex; flex-direction: column; align-items: center; background: #1e2130; padding: 15px; border-radius: 12px; border: 1px solid #3d425a;">
         <elevenlabs-convai 
@@ -165,7 +166,7 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 9. MONITOREO Y VENTAS (VERSION 4.1 COMPLETO) ---
+# --- 9. MONITOREO Y VENTAS (RESTAURACIÓN VERSION 4.1) ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if portfolio:
     for t, info in portfolio.items():
@@ -183,6 +184,7 @@ if portfolio:
             with st.expander(h_text):
                 c_df, c_btn = st.columns([0.7, 0.3])
                 with c_df:
+                    st.write("**Capas (MXN):**")
                     st.dataframe(pd.DataFrame(info["layers"]), use_container_width=True)
                     st.write(f"**Breakeven USD Sugerido:** `${be_usd:,.2f}`")
                 with c_btn:
