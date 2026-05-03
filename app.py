@@ -17,39 +17,37 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CONEXIÓN SEGURA A SUPABASE ---
+# --- 2. CONEXIÓN Y SEGURIDAD (Protocolo Atómico) ---
 def get_supabase():
-    # Inicialización dinámica para evitar sesiones latentes
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-supabase = get_supabase()
-
-# FIX: Función de Acceso con Callback para evitar el doble clic
-def login_callback():
-    if "email_input" in st.session_state and "pass_input" in st.session_state:
+def handle_login():
+    """Procesa el acceso en un solo clic usando callbacks."""
+    if st.session_state.email_key and st.session_state.pass_key:
         try:
+            supabase = get_supabase()
             res = supabase.auth.sign_in_with_password({
-                "email": st.session_state.email_input, 
-                "password": st.session_state.pass_input
+                "email": st.session_state.email_key, 
+                "password": st.session_state.pass_key
             })
             if res.user:
                 st.session_state.user = res.user
         except:
-            st.session_state.login_error = True
+            st.session_state.login_error = "Credenciales incorrectas."
 
 def auth_ui():
     st.sidebar.title("🔐 Acceso")
     mode = st.sidebar.radio("Acción:", ["Entrar", "Registrarse"])
-    st.sidebar.text_input("Email", key="email_input")
-    st.sidebar.text_input("Contraseña", type="password", key="pass_input")
+    st.sidebar.text_input("Email", key="email_key")
+    st.sidebar.text_input("Contraseña", type="password", key="pass_key")
     
-    if st.sidebar.button("Confirmar", on_click=login_callback):
+    if st.sidebar.button("Confirmar", on_click=handle_login):
         if "user" in st.session_state:
             st.rerun()
     
-    if st.session_state.get("login_error"):
-        st.sidebar.error("Credenciales incorrectas.")
-        st.session_state.login_error = False
+    if "login_error" in st.session_state:
+        st.sidebar.error(st.session_state.login_error)
+        del st.session_state.login_error
 
 if "user" not in st.session_state:
     auth_ui()
@@ -84,7 +82,6 @@ def get_market_data(ticker):
 # --- 4. CARGA DE PORTAFOLIO ---
 user_id = st.session_state.user.id
 try:
-    # Refrescamos cliente antes de la carga crítica
     res = get_supabase().table("positions").select("*").eq("user_id", user_id).execute()
     positions_raw = res.data
 except: positions_raw = []
@@ -99,43 +96,53 @@ for p in positions_raw:
     portfolio[t]["total_net_cost"] += p["total_net_cost"]
     portfolio[t]["ids"].append(p["id"])
     portfolio[t]["layers"].append({
-        "qty": p["shares"], 
-        "price_gross": p["total_gross_cost"] / p["shares"] if p["shares"] > 0 else 0, 
-        "date": p.get("created_at", "")[:10]
+        "qty": p["shares"], "price_gross": p["total_gross_cost"] / p["shares"] if p["shares"] > 0 else 0, "date": p.get("created_at", "")[:10]
     })
 
-# --- 5. SIDEBAR: OPERATIVA (CON DROPDOWN DE TICKERS) ---
+# --- 5. SIDEBAR: OPERATIVA (Fix Ticker Manual) ---
+def handle_purchase():
+    """Garantiza inserción limpia en la DB en un solo clic."""
+    t_val = st.session_state.t_manual_key.upper().strip() if st.session_state.t_choice_key == "Manual" else st.session_state.t_choice_key
+    if not t_val:
+        st.session_state.buy_err = "Error: Ticker vacío."
+        return
+
+    fx = get_fx_rate()
+    comm = st.session_state.comm_key / 100
+    costo_bruto = float(st.session_state.q_key * st.session_state.p_key)
+    costo_neto = float(costo_bruto * (1 + (comm * 1.16)))
+
+    try:
+        get_supabase().table("positions").insert({
+            "user_id": user_id, "ticker": t_val, "shares": float(st.session_state.q_key),
+            "total_gross_cost": costo_bruto, "total_net_cost": costo_neto
+        }).execute()
+        st.session_state.pop("buy_err", None)
+    except:
+        st.session_state.buy_err = "Error en base de datos. Verifique el ticker."
+
 with st.sidebar:
     st.title("🛠️ Configuración")
     fx_now = get_fx_rate()
-    st.sidebar.metric("Tipo de Cambio USD/MXN", f"${fx_now:,.4f}")
-    comm_pct = st.number_input("Comisión Broker (%)", value=0.25, step=0.01) / 100
-    f_total = comm_pct * 1.16
+    st.sidebar.metric("FX USD/MXN", f"${fx_now:,.4f}")
+    st.number_input("Comisión Broker (%)", value=0.25, step=0.01, key="comm_key")
 
     st.divider()
     st.subheader("📥 Registro de Capas")
-    
-    # Dropdown de Tickers para mitigar error humano
-    common_tickers = ["SOXL", "SOXX", "NVDA", "AAPL", "EEM", "Manual"]
-    t_choice = st.selectbox("Ticker", options=common_tickers)
+    common = ["SOXL", "SOXX", "NVDA", "AAPL", "EEM", "Manual"]
+    st.selectbox("Ticker", options=common, key="t_choice_key")
     
     with st.form("compra_form", clear_on_submit=True):
-        t_final = st.text_input("Confirmar Ticker").upper().strip() if t_choice == "Manual" else t_choice
-        q_in = st.number_input("Cantidad", min_value=1)
-        p_in = st.number_input("Precio Compra Bruto (MXN)", min_value=0.01)
+        if st.session_state.t_choice_key == "Manual":
+            st.text_input("Confirmar Ticker", key="t_manual_key")
+        st.number_input("Cantidad", min_value=1, key="q_key")
+        st.number_input("Precio Compra Bruto (MXN)", min_value=0.01, key="p_key")
         
-        if st.form_submit_button("Confirmar Compra"):
-            costo_bruto = float(q_in * p_in)
-            costo_neto = float(costo_bruto * (1 + f_total))
-            try:
-                # Inserción con cliente fresco para evitar APIError
-                get_supabase().table("positions").insert({
-                    "user_id": user_id, "ticker": t_final, "shares": float(q_in),
-                    "total_gross_cost": costo_bruto, "total_net_cost": costo_neto
-                }).execute()
-                st.rerun()
-            except Exception as e:
-                st.error("Error en base de datos. Verifique la conexión.")
+        if st.form_submit_button("Confirmar Compra", on_click=handle_purchase):
+            st.rerun()
+
+    if "buy_err" in st.session_state:
+        st.error(st.session_state.buy_err)
 
     if st.button("Cerrar Sesión"):
         del st.session_state.user
@@ -155,15 +162,15 @@ for t, info in portfolio.items():
 # --- 7. DASHBOARD ---
 st.title("💼 Terminal de Gestión Patrimonial")
 k1, k2, k3 = st.columns(3)
-unrealized_net = sum((active_data[t]["v_mkt"]*(1-f_total)) - portfolio[t]["total_net_cost"] for t in active_data) if active_data else 0.0
+unrealized_net = sum((active_data[t]["v_mkt"]*(1-0.0029)) - portfolio[t]["total_net_cost"] for t in active_data) if active_data else 0.0
 
-with k1: st.markdown(f"<div class='kpi-card'><div class='kpi-lbl'>VALOR DEL PORTAFOLIO ACTUAL</div><div class='kpi-val'>${total_nav:,.2f}</div></div>", unsafe_allow_html=True)
-with k2: st.markdown(f"<div class='kpi-card' style='border-left-color: #00ff88;'><div class='kpi-lbl'>UTILIDAD/PERDIDA REALIZADA</div><div class='kpi-val'>$0.00</div></div>", unsafe_allow_html=True)
-with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'><div class='kpi-lbl'>PLUSVALIA/MINUSVALIA NETA</div><div class='kpi-val'>${unrealized_net:,.2f}</div></div>", unsafe_allow_html=True)
+with k1: st.markdown(f"<div class='kpi-card'><div class='kpi-lbl'>VALOR DEL PORTAFOLIO</div><div class='kpi-val'>${total_nav:,.2f}</div></div>", unsafe_allow_html=True)
+with k2: st.markdown(f"<div class='kpi-card' style='border-left-color: #00ff88;'><div class='kpi-lbl'>UTILIDAD REALIZADA</div><div class='kpi-val'>$0.00</div></div>", unsafe_allow_html=True)
+with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'><div class='kpi-lbl'>PLUSVALIA NETA</div><div class='kpi-val'>${unrealized_net:,.2f}</div></div>", unsafe_allow_html=True)
 
 st.divider()
 
-# --- 8. MONITOREO (CON REGISTRAR VENTA) ---
+# --- 8. MONITOREO ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if not portfolio:
     st.info("Sin posiciones activas.")
@@ -171,45 +178,23 @@ else:
     for t, info in portfolio.items():
         if t in active_data:
             m = active_data[t]
-            net_pnl = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
-            be_usd = info["total_net_cost"] / (info["shares"] * fx_now * (1 - f_total))
+            net_pnl = (m["v_mkt"] * (1 - 0.0029)) - info["total_net_cost"]
+            be_usd = info["total_net_cost"] / (info["shares"] * fx_now * (1 - 0.0029))
             status = "🟢" if net_pnl >= 0 else "🔴"
             weight = (m["v_mkt"] / total_nav) * 100
-            v_d = ((m["p_usd"] / m["prev_usd"]) - 1) * 100
             
-            h_text = f"{t} | USD: ${m['p_usd']:,.2f} ({v_d:+.2f}%) | Real: {status} ${net_pnl:,.2f} | Peso: {weight:.1f}%"
+            h_text = f"{t} | USD: ${m['p_usd']:,.2f} | Real: {status} ${net_pnl:,.2f} | Peso: {weight:.1f}%"
             with st.expander(h_text):
                 col_df, col_act = st.columns([0.7, 0.3])
                 with col_df:
-                    st.write("**Desglose de Capas (MXN):**")
                     st.dataframe(pd.DataFrame(info["layers"]), use_container_width=True)
                     st.write(f"**Breakeven USD Sugerido:** `${be_usd:,.2f}`")
-                
                 with col_act:
-                    st.write("**Acciones:**")
                     if st.button("🗑️ Eliminar Activo", key=f"del_{t}"):
                         get_supabase().table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                         st.rerun()
-                    
-                    with st.expander("📤 Registrar Venta"):
-                        with st.form(f"sell_{t}"):
-                            q_s = st.number_input("Títulos", 1, int(info["shares"]))
-                            p_s = st.number_input("Precio Venta Bruto (MXN)")
-                            if st.form_submit_button("Ejecutar Venta"):
-                                avg_g = info["total_gross_cost"] / info["shares"]
-                                avg_n = info["total_net_cost"] / info["shares"]
-                                new_shares = info["shares"] - q_s
-                                if new_shares <= 0:
-                                    get_supabase().table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
-                                else:
-                                    get_supabase().table("positions").update({
-                                        "shares": float(new_shares),
-                                        "total_gross_cost": float(new_shares * avg_g),
-                                        "total_net_cost": float(new_shares * avg_n)
-                                    }).eq("id", info["ids"][0]).execute()
-                                st.rerun()
 
-# --- 9. ANÁLISIS TÉCNICO (4 BLOQUES + NIVELES 80/20) ---
+# --- 9. ANÁLISIS TÉCNICO ---
 st.divider()
 t_tech_list = list(portfolio.keys()) if portfolio else ["SOXX", "NVDA", "AAPL"]
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=t_tech_list)
