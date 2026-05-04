@@ -40,7 +40,6 @@ if "user" not in st.session_state:
     auth_mode = st.sidebar.radio("Acción:", ["Entrar", "Registrarse"])
     email = st.sidebar.text_input("Email")
     password = st.sidebar.text_input("Contraseña", type="password")
-    
     if st.sidebar.button("Confirmar Acceso"):
         try:
             if auth_mode == "Entrar":
@@ -55,7 +54,7 @@ if "user" not in st.session_state:
             st.sidebar.error(f"Error: {e}")
     st.stop()
 
-# --- 4. MOTORES DE CÁLCULO (FX FIX OPTIMIZADO) ---
+# --- 4. MOTORES DE CÁLCULO ---
 def clean_df(df):
     if df is None or df.empty: return None
     if isinstance(df.columns, pd.MultiIndex):
@@ -66,16 +65,12 @@ def clean_df(df):
 @st.cache_data(ttl=60)
 def get_fx_rate():
     try:
-        # Cambio de download a Ticker.history para mayor estabilidad en spot price
-        fx_ticker = yf.Ticker("USDMXN=X")
-        data = fx_ticker.history(period="1d", interval="1m")
+        # Optimización para traer el precio spot real (aprox 17.51)
+        data = yf.Ticker("USDMXN=X").history(period="1d", interval="1m")
         if not data.empty:
             return float(data['Close'].iloc[-1])
-        # Segundo intento con periodo de 5 días si el mercado está cerrado (fin de semana)
-        data_back = fx_ticker.history(period="5d")
-        return float(data_back['Close'].iloc[-1])
-    except: 
-        return 17.5183 # Fallback actualizado al último valor real conocido
+        return 17.5183 
+    except: return 17.5183
 
 @st.cache_data(ttl=300)
 def get_market_data(ticker):
@@ -89,6 +84,7 @@ def get_market_data(ticker):
 
 # --- 5. CARGA DE DATOS (VERSIÓN 4.1 ESTABLE) ---
 user_id = st.session_state.user.id
+fx_now = get_fx_rate() # Definido antes de los cálculos para evitar NameError
 
 try:
     res_pos = supabase.table("positions").select("*").eq("user_id", user_id).execute()
@@ -117,7 +113,6 @@ for p in positions_raw:
 # --- 6. SIDEBAR: OPERATIVA ---
 with st.sidebar:
     st.title("🛠️ Configuración")
-    fx_now = get_fx_rate()
     st.metric("FX USD/MXN", f"${fx_now:,.4f}")
     comm_pct = st.number_input("Comisión Broker (%)", value=0.25, step=0.01) / 100
     f_total = comm_pct * 1.16
@@ -168,7 +163,7 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 9. MONITOREO Y VENTAS ---
+# --- 9. MONITOREO Y VENTAS (STRICT V4.1) ---
 st.subheader("📊 Monitoreo de Posiciones Activas")
 if not portfolio:
     st.info("Sin posiciones activas.")
@@ -183,6 +178,7 @@ else:
             weight = (m["v_mkt"] / total_nav) * 100
             v_d = ((m["p_usd"] / m["prev_usd"]) - 1) * 100
             
+            # Formato exacto Versión 4.1
             h_text = f"{t} | USD: ${m['p_usd']:,.2f} ({v_d:+.2f}%) | Real: {status} ${net_pnl:,.2f} ({pnl_pct:+.2f}%) | Peso: {weight:.1f}%"
             with st.expander(h_text):
                 c_df, c_btn = st.columns([0.7, 0.3])
@@ -196,22 +192,22 @@ else:
                     st.divider()
                     with st.expander("📤 Registrar Venta"):
                         with st.form(f"sell_{t}"):
-                            q_sell = st.number_input("Títulos a Vender", 1, int(info["shares"]))
-                            p_sell_gross = st.number_input("Precio Venta Bruto (MXN)", min_value=0.01)
+                            q_sell = st.number_input("Títulos", 1, int(info["shares"]))
+                            p_sell_gross = st.number_input("Precio MXN Bruto", min_value=0.01)
                             if st.form_submit_button("Ejecutar Venta"):
                                 rev_net = (q_sell * p_sell_gross) * (1 - f_total)
                                 avg_net_cost = info["total_net_cost"] / info["shares"]
                                 pnl_realized = float(rev_net - (q_sell * avg_net_cost))
                                 supabase.table("trades").insert({"user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)}).execute()
-                                remaining_shares = info["shares"] - q_sell
-                                if remaining_shares <= 0:
+                                n_sh = info["shares"] - q_sell
+                                if n_sh <= 0:
                                     supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                                 else:
                                     avg_gross_cost = info["total_gross_cost"] / info["shares"]
-                                    supabase.table("positions").update({"shares": float(remaining_shares), "total_gross_cost": float(remaining_shares * avg_gross_cost), "total_net_cost": float(remaining_shares * avg_net_cost)}).eq("id", info["ids"][0]).execute()
+                                    supabase.table("positions").update({"shares": float(n_sh), "total_gross_cost": float(n_sh * avg_gross_cost), "total_net_cost": float(n_sh * avg_net_cost)}).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
-# --- 10. GRÁFICO TÉCNICO ---
+# --- 10. GRÁFICO TÉCNICO (V4.1 - EJE DERECHO) ---
 st.divider()
 t_tech_list = list(portfolio.keys()) if portfolio else ["SOXX", "NVDA", "AAPL"]
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=t_tech_list)
@@ -227,9 +223,9 @@ if df_t is not None:
     s_list = [c for c in df_t.columns if 'macds' in c.lower()]
     h_list = [c for c in df_t.columns if 'macdh' in c.lower()]
     if m_list and s_list:
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_cols[0]] if 'm_cols' in locals() else df_t[m_list[0]], name="MACD", line=dict(color='#00e1ff', width=1.5)), row=3, col=1)
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_cols[0]] if 's_cols' in locals() else df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
-        fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_cols[0]] if 'h_cols' in locals() else df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_list[0]], name="MACD", line=dict(color='#00e1ff', width=1.5)), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
+        fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
 
     k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
     d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
@@ -240,39 +236,32 @@ if df_t is not None:
         fig.add_hline(y=20, line_dash="dash", line_color="rgba(255,255,255,0.3)", row=4, col=1)
 
     fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=60, t=10, b=10), showlegend=False)
+    # Eje Y a la derecha (v4.1)
     fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
-# --- 11. AGENTE TOBIAS (JSON CONTEXT FIX) ---
-resumen_tobias = []
+# --- 11. AGENTE TOBIAS (DYNAMIC CONTEXT & TEXT FIX) ---
+summary_data = []
 if portfolio:
-    for t, info in portfolio.items():
+    for t, data in portfolio.items():
         if t in active_data:
             m = active_data[t]
-            pnl_neto = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
-            pnl_pct = (pnl_neto / info["total_net_cost"]) * 100
-            resumen_tobias.append({
-                "ticker": t,
-                "shares": int(info['shares']),
-                "avg_cost_mxn": round(info['total_net_cost']/info['shares'], 2),
-                "spot_usd": round(m['p_usd'], 2),
-                "return_pct": round(pnl_pct, 2)
-            })
-    # Enviamos un string JSON limpio para que Tobias no tenga errores de lectura
-    portfolio_context = json.dumps(resumen_tobias)
+            pnl_pct = ((m["v_mkt"] * (1 - f_total)) - data["total_net_cost"]) / data["total_net_cost"] * 100
+            summary_data.append(f"{t}: {int(data['shares'])} títulos, costo promedio ${data['total_net_cost']/data['shares']:.2f}, retorno {pnl_pct:+.2f}%")
+    portfolio_summary = " | ".join(summary_data)
 else:
-    portfolio_context = "Sin posiciones"
+    portfolio_summary = "El portafolio está vacío."
 
-dynamic_vars = json.dumps({"portfolio_context": portfolio_context})
+safe_summary = portfolio_summary.replace('"', '\\"')
 
-tobias_widget_html = f"""
+tobias_html = f"""
 <div class="floating-agent">
     <elevenlabs-convai 
         agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"
-        dynamic-variables='{dynamic_vars}'
-        override-config='{{"launcher": {{"label": "¿Tienes dudas?", "callActionText": "Habla con Tobias, tu asesor"}}}}'>
+        dynamic-variables='{{"portfolio_context": "{safe_summary}"}}'
+        override-config='{{"launcher": {{"label": "¿Tienes dudas?", "callActionText": "Habla con Tobias, tu asesor de inversión"}}}}'>
     </elevenlabs-convai>
     <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
 </div>
 """
-components.html(tobias_widget_html, height=500)
+components.html(tobias_html, height=500)
