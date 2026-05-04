@@ -67,22 +67,11 @@ def clean_df(df):
 @st.cache_data(ttl=60)
 def get_fx_rate():
     try:
-        # IMPLEMENTACIÓN DEL FIX: Uso de Ticker().history para máxima robustez en el precio spot
-        fx_ticker = yf.Ticker("USDMXN=X")
-        data = fx_ticker.history(period="1d", interval="1m")
-        data = clean_df(data)
-        if data is not None and not data.empty:
-            return float(data['close'].iloc[-1])
-        
-        # Intento secundario con histórico diario si el mercado está cerrado (ej. fines de semana)
-        data_back = fx_ticker.history(period="5d")
-        data_back = clean_df(data_back)
-        if data_back is not None and not data_back.empty:
-            return float(data_back['close'].iloc[-1])
-            
-        return 17.5183 # Fallback actualizado al último valor real conocido
-    except: 
-        return 17.5183
+        data = yf.Ticker("USDMXN=X").history(period="1d", interval="1m")
+        if not data.empty:
+            return float(data['Close'].iloc[-1])
+        return 17.5183 
+    except: return 17.5183
 
 @st.cache_data(ttl=300)
 def get_market_data(ticker):
@@ -200,22 +189,6 @@ else:
                     if st.button("🗑️ Eliminar Activo", key=f"del_{t}"):
                         supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                         st.rerun()
-                    st.divider()
-                    with st.expander("📤 Registrar Venta"):
-                        with st.form(f"sell_{t}"):
-                            q_sell = st.number_input("Títulos", 1, int(info["shares"]))
-                            p_sell_gross = st.number_input("Precio Venta (MXN)", min_value=0.01)
-                            if st.form_submit_button("Ejecutar Venta"):
-                                rev_net = (q_sell * p_sell_gross) * (1 - f_total)
-                                avg_net_cost = info["total_net_cost"] / info["shares"]
-                                pnl_realized = float(rev_net - (q_sell * avg_net_cost))
-                                supabase.table("trades").insert({"user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)}).execute()
-                                n_sh = info["shares"] - q_sell
-                                if n_sh <= 0: supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
-                                else:
-                                    avg_g = info["total_gross_cost"] / info["shares"]
-                                    supabase.table("positions").update({"shares": float(n_sh), "total_gross_cost": float(n_sh * avg_g), "total_net_cost": float(n_sh * avg_net_cost)}).eq("id", info["ids"][0]).execute()
-                                st.rerun()
 
 # --- 10. GRÁFICO TÉCNICO ---
 st.divider()
@@ -249,7 +222,7 @@ if df_t is not None:
     fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
-# --- 11. PREPARACIÓN DE CONTEXTO Y AGENTE FLOTANTE ---
+# --- 11. PREPARACIÓN DE CONTEXTO (FIX DE DIVISA MXN) ---
 portfolio_summary = ""
 if portfolio:
     sum_list = []
@@ -257,12 +230,12 @@ if portfolio:
         if t in active_data:
             m = active_data[t]
             pnl_pct = ((m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]) / info["total_net_cost"] * 100
-            sum_list.append(f"{t}: {int(info['shares'])} títulos, Costo Promedio: ${info['total_net_cost']/info['shares']:.2f}, Rendimiento: {pnl_pct:+.2f}%")
+            # Agregamos 'MXN' explícitamente al costo promedio enviado al agente
+            sum_list.append(f"{t}: {int(info['shares'])} títulos, Costo Promedio: ${info['total_net_cost']/info['shares']:.2f} MXN, Rendimiento: {pnl_pct:+.2f}%")
     portfolio_summary = " | ".join(sum_list)
 else:
     portfolio_summary = "Portafolio vacío."
 
-# Escapamos comillas para el JSON del widget
 safe_summary = portfolio_summary.replace('"', '\\"')
 
 tobias_floating_html = f"""
