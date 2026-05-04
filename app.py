@@ -222,7 +222,7 @@ if df_t is not None:
     fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
-# --- 11. PREPARACIÓN DE CONTEXTO (FIX DE DIVISA MXN) ---
+# --- 11. PREPARACIÓN DE CONTEXTO (DIVISA MXN) Y WIDGET PERSONALIZADO ---
 portfolio_summary = ""
 if portfolio:
     sum_list = []
@@ -230,7 +230,6 @@ if portfolio:
         if t in active_data:
             m = active_data[t]
             pnl_pct = ((m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]) / info["total_net_cost"] * 100
-            # Agregamos 'MXN' explícitamente al costo promedio enviado al agente
             sum_list.append(f"{t}: {int(info['shares'])} títulos, Costo Promedio: ${info['total_net_cost']/info['shares']:.2f} MXN, Rendimiento: {pnl_pct:+.2f}%")
     portfolio_summary = " | ".join(sum_list)
 else:
@@ -238,11 +237,13 @@ else:
 
 safe_summary = portfolio_summary.replace('"', '\\"')
 
+# Configuración personalizada de textos para Tobias
 tobias_floating_html = f"""
 <div class="floating-agent">
     <elevenlabs-convai 
         agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"
-        dynamic-variables='{{"portfolio_context": "{safe_summary}"}}'>
+        dynamic-variables='{{"portfolio_context": "{safe_summary}"}}'
+        override-config='{{"launcher": {{"label": "¿Dudas? Consulta a Tobias", "callActionText": "Inicia consulta con Tobias, tu asesor de inversiones"}}}}'>
     </elevenlabs-convai>
     <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
 </div>
