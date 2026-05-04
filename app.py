@@ -67,10 +67,22 @@ def clean_df(df):
 @st.cache_data(ttl=60)
 def get_fx_rate():
     try:
-        data = yf.download("USDMXN=X", period="1d", interval="1m", progress=False)
+        # IMPLEMENTACIÓN DEL FIX: Uso de Ticker().history para máxima robustez en el precio spot
+        fx_ticker = yf.Ticker("USDMXN=X")
+        data = fx_ticker.history(period="1d", interval="1m")
         data = clean_df(data)
-        return float(data['close'].iloc[-1])
-    except: return 18.50
+        if data is not None and not data.empty:
+            return float(data['close'].iloc[-1])
+        
+        # Intento secundario con histórico diario si el mercado está cerrado (ej. fines de semana)
+        data_back = fx_ticker.history(period="5d")
+        data_back = clean_df(data_back)
+        if data_back is not None and not data_back.empty:
+            return float(data_back['close'].iloc[-1])
+            
+        return 17.5183 # Fallback actualizado al último valor real conocido
+    except: 
+        return 17.5183
 
 @st.cache_data(ttl=300)
 def get_market_data(ticker):
