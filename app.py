@@ -55,7 +55,7 @@ if "user" not in st.session_state:
             st.sidebar.error(f"Error: {e}")
     st.stop()
 
-# --- 4. MOTORES DE CÁLCULO ---
+# --- 4. MOTORES DE CÁLCULO (FX FIX OPTIMIZADO) ---
 def clean_df(df):
     if df is None or df.empty: return None
     if isinstance(df.columns, pd.MultiIndex):
@@ -66,10 +66,16 @@ def clean_df(df):
 @st.cache_data(ttl=60)
 def get_fx_rate():
     try:
-        data = yf.download("USDMXN=X", period="1d", interval="1m", progress=False)
-        data = clean_df(data)
-        return float(data['close'].iloc[-1])
-    except: return 18.50
+        # Cambio de download a Ticker.history para mayor estabilidad en spot price
+        fx_ticker = yf.Ticker("USDMXN=X")
+        data = fx_ticker.history(period="1d", interval="1m")
+        if not data.empty:
+            return float(data['Close'].iloc[-1])
+        # Segundo intento con periodo de 5 días si el mercado está cerrado (fin de semana)
+        data_back = fx_ticker.history(period="5d")
+        return float(data_back['Close'].iloc[-1])
+    except: 
+        return 17.5183 # Fallback actualizado al último valor real conocido
 
 @st.cache_data(ttl=300)
 def get_market_data(ticker):
@@ -221,9 +227,9 @@ if df_t is not None:
     s_list = [c for c in df_t.columns if 'macds' in c.lower()]
     h_list = [c for c in df_t.columns if 'macdh' in c.lower()]
     if m_list and s_list:
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_list[0]], name="MACD", line=dict(color='#00e1ff', width=1.5)), row=3, col=1)
-        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
-        fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_cols[0]] if 'm_cols' in locals() else df_t[m_list[0]], name="MACD", line=dict(color='#00e1ff', width=1.5)), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_cols[0]] if 's_cols' in locals() else df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
+        fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_cols[0]] if 'h_cols' in locals() else df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
 
     k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
     d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
@@ -237,28 +243,36 @@ if df_t is not None:
     fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
-# --- 11. CONTEXTO PARA TOBIAS (DYNAMIC VARIABLES) ---
-summary_data = []
+# --- 11. AGENTE TOBIAS (JSON CONTEXT FIX) ---
+resumen_tobias = []
 if portfolio:
-    for ticker, data in portfolio.items():
-        if ticker in active_data:
-            m = active_data[ticker]
-            pnl_pct = ((m["v_mkt"] * (1 - f_total)) - data["total_net_cost"]) / data["total_net_cost"] * 100
-            summary_data.append(f"{ticker}: {int(data['shares'])} títulos, Costo Promedio: ${data['total_net_cost']/data['shares']:.2f}, Rendimiento: {pnl_pct:+.2f}%")
-    portfolio_summary = " | ".join(summary_data)
+    for t, info in portfolio.items():
+        if t in active_data:
+            m = active_data[t]
+            pnl_neto = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
+            pnl_pct = (pnl_neto / info["total_net_cost"]) * 100
+            resumen_tobias.append({
+                "ticker": t,
+                "shares": int(info['shares']),
+                "avg_cost_mxn": round(info['total_net_cost']/info['shares'], 2),
+                "spot_usd": round(m['p_usd'], 2),
+                "return_pct": round(pnl_pct, 2)
+            })
+    # Enviamos un string JSON limpio para que Tobias no tenga errores de lectura
+    portfolio_context = json.dumps(resumen_tobias)
 else:
-    portfolio_summary = "El portafolio está vacío."
+    portfolio_context = "Sin posiciones"
 
-# Escapamos comillas para evitar errores de JSON
-safe_summary = portfolio_summary.replace('"', '\\"')
+dynamic_vars = json.dumps({"portfolio_context": portfolio_context})
 
-tobias_floating_html = f"""
+tobias_widget_html = f"""
 <div class="floating-agent">
     <elevenlabs-convai 
         agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"
-        dynamic-variables='{{"portfolio_context": "{safe_summary}"}}'>
+        dynamic-variables='{dynamic_vars}'
+        override-config='{{"launcher": {{"label": "¿Tienes dudas?", "callActionText": "Habla con Tobias, tu asesor"}}}}'>
     </elevenlabs-convai>
     <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
 </div>
 """
-components.html(tobias_floating_html, height=500)
+components.html(tobias_widget_html, height=500)
