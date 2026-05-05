@@ -68,8 +68,8 @@ def get_fx_rate():
         data = yf.Ticker("USDMXN=X").history(period="1d", interval="1m")
         if not data.empty:
             return float(data['Close'].iloc[-1])
-        return 17.5213 
-    except: return 17.5213
+        return 17.5110 
+    except: return 17.5110
 
 @st.cache_data(ttl=300)
 def get_market_data(ticker):
@@ -175,13 +175,10 @@ else:
                             q_sell = st.number_input("Títulos a Vender", 1, int(info["shares"]))
                             p_sell_gross = st.number_input("Precio Venta Bruto (MXN)", min_value=0.01)
                             if st.form_submit_button("Ejecutar Venta"):
-                                # Utilidad Realizada = (Venta Neta) - (Costo Compra Neto Proporcional)
                                 rev_net = (q_sell * p_sell_gross) * (1 - f_total)
                                 avg_net_cost = info["total_net_cost"] / info["shares"]
                                 pnl_realized = float(rev_net - (q_sell * avg_net_cost))
-                                
                                 supabase.table("trades").insert({"user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)}).execute()
-                                
                                 remaining_shares = info["shares"] - q_sell
                                 if remaining_shares <= 0:
                                     supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
@@ -194,16 +191,42 @@ else:
                                     }).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
-# --- 10. GRÁFICO TÉCNICO (EJE DERECHO) ---
+# --- 10. GRÁFICO TÉCNICO (RESTAURACIÓN INDICADORES) ---
 st.divider()
 t_tech = st.selectbox("Gráfico Técnico:", options=list(portfolio.keys()) if portfolio else ["SOXX"])
 df_t = get_market_data(t_tech)
+
 if df_t is not None:
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.4, 0.15, 0.22, 0.23])
-    fig.add_trace(go.Candlestick(x=df_t.index, open=df_t['open'], high=df_t['high'], low=df_t['low'], close=df_t['close']), row=1, col=1)
-    fig.update_yaxes(side="right", gridcolor="rgba(128,128,128,0.1)")
-    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False)
-    st.plotly_chart(fig, use_container_width=True)
+    
+    # Velas
+    fig.add_trace(go.Candlestick(x=df_t.index, open=df_t['open'], high=df_t['high'], low=df_t['low'], close=df_t['close'], name="Precio"), row=1, col=1)
+    
+    # Volumen
+    v_colors = ['#26a69a' if df_t['close'].iloc[i] >= df_t['open'].iloc[i] else '#ef5350' for i in range(len(df_t))]
+    fig.add_trace(go.Bar(x=df_t.index, y=df_t['volume'], name="Volumen", marker_color=v_colors, opacity=0.8), row=2, col=1)
+    
+    # MACD
+    m_list = [c for c in df_t.columns if 'macd' in c.lower() and 'h' not in c.lower() and 's' not in c.lower()]
+    s_list = [c for c in df_t.columns if 'macds' in c.lower()]
+    h_list = [c for c in df_t.columns if 'macdh' in c.lower()]
+    if m_list and s_list:
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_list[0]], name="MACD", line=dict(color='#00e1ff', width=1.5)), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
+        fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
+
+    # Stoch RSI
+    k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
+    d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
+    if k_list and d_list:
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[k_list[0]], name="%K", line=dict(color='#00ff88', width=1.5)), row=4, col=1)
+        fig.add_trace(go.Scatter(x=df_t.index, y=df_t[d_list[0]], name="%D", line=dict(color='#ff4b4b', width=1.5, dash='dot')), row=4, col=1)
+        fig.add_hline(y=80, line_dash="dash", line_color="rgba(255,255,255,0.3)", row=4, col=1)
+        fig.add_hline(y=20, line_dash="dash", line_color="rgba(255,255,255,0.3)", row=4, col=1)
+
+    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=60, t=10, b=10), showlegend=False)
+    fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
 # --- 11. AGENTE TOBIAS ---
 sum_list = []
