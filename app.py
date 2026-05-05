@@ -17,6 +17,7 @@ st.markdown("""
     .kpi-val { font-size: 26px; font-weight: bold; color: white; }
     .kpi-lbl { font-size: 13px; color: #808495; text-transform: uppercase; letter-spacing: 1px; }
     
+    /* Contenedor del Agente Flotante */
     .floating-agent {
         position: fixed;
         bottom: 20px;
@@ -55,7 +56,7 @@ if "user" not in st.session_state:
             st.sidebar.error(f"Error: {e}")
     st.stop()
 
-# --- 4. MOTORES DE CÁLCULO (FX FIX DE PROYECTO 1.1) ---
+# --- 4. MOTORES DE CÁLCULO ---
 def clean_df(df):
     if df is None or df.empty: return None
     if isinstance(df.columns, pd.MultiIndex):
@@ -66,12 +67,11 @@ def clean_df(df):
 @st.cache_data(ttl=60)
 def get_fx_rate():
     try:
-        # Implementación robusta del Proyecto 1.1
-        fx_data = yf.Ticker("USDMXN=X").history(period="1d", interval="1m")
-        if not fx_data.empty:
-            return float(fx_data['Close'].iloc[-1])
-        return 17.5213 
-    except: return 17.5213
+        data = yf.Ticker("USDMXN=X").history(period="1d", interval="1m")
+        if not data.empty:
+            return float(data['Close'].iloc[-1])
+        return 17.5183 
+    except: return 17.5183
 
 @st.cache_data(ttl=300)
 def get_market_data(ticker):
@@ -83,7 +83,7 @@ def get_market_data(ticker):
         df.columns = [c.lower() for c in df.columns]
     return df
 
-# --- 5. CARGA DE DATOS ---
+# --- 5. CARGA DE DATOS (VERSION 4.1) ---
 user_id = st.session_state.user.id
 
 try:
@@ -153,7 +153,7 @@ for t, info in portfolio.items():
         total_nav += v_mkt
         active_data[t] = {"p_usd": p_usd, "v_mkt": v_mkt, "df": df, "prev_usd": float(df['close'].iloc[-2])}
 
-# --- 8. DASHBOARD KPI ---
+# --- 8. DASHBOARD KPI (VERSION 4.1) ---
 st.title("💼 Terminal de Gestión Patrimonial")
 k1, k2, k3 = st.columns(3)
 unrealized_net = sum((active_data[t]["v_mkt"]*(1-f_total)) - portfolio[t]["total_net_cost"] for t in active_data) if active_data else 0.0
@@ -190,7 +190,7 @@ else:
                         supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                         st.rerun()
 
-# --- 10. GRÁFICO TÉCNICO (V4.1 - EJES DERECHA) ---
+# --- 10. GRÁFICO TÉCNICO ---
 st.divider()
 t_tech_list = list(portfolio.keys()) if portfolio else ["SOXX", "NVDA", "AAPL"]
 t_tech = st.selectbox("Selecciona para Gráfico Técnico:", options=t_tech_list)
@@ -222,7 +222,7 @@ if df_t is not None:
     fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
-# --- 11. AGENTE TOBIAS (PERSONALIZACIÓN Y FIX DE VISIBILIDAD) ---
+# --- 11. PREPARACIÓN DE CONTEXTO (FIX DE DIVISA MXN) ---
 portfolio_summary = ""
 if portfolio:
     sum_list = []
@@ -230,6 +230,7 @@ if portfolio:
         if t in active_data:
             m = active_data[t]
             pnl_pct = ((m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]) / info["total_net_cost"] * 100
+            # Agregamos 'MXN' explícitamente al costo promedio enviado al agente
             sum_list.append(f"{t}: {int(info['shares'])} títulos, Costo Promedio: ${info['total_net_cost']/info['shares']:.2f} MXN, Rendimiento: {pnl_pct:+.2f}%")
     portfolio_summary = " | ".join(sum_list)
 else:
@@ -237,16 +238,11 @@ else:
 
 safe_summary = portfolio_summary.replace('"', '\\"')
 
-# Variables de configuración para evitar errores de renderizado
-config_launcher = {"label": "¿Dudas? Consulta a Tobias", "callActionText": "Habla con Tobias, tu asesor de inversiones"}
-config_json = json.dumps({"launcher": config_launcher})
-
 tobias_floating_html = f"""
 <div class="floating-agent">
     <elevenlabs-convai 
         agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"
-        dynamic-variables='{{"portfolio_context": "{safe_summary}"}}'
-        override-config='{config_json}'>
+        dynamic-variables='{{"portfolio_context": "{safe_summary}"}}'>
     </elevenlabs-convai>
     <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
 </div>
