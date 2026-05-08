@@ -145,32 +145,41 @@ def export_portfolio_pdf(t_nav, r_sum, u_net):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("helvetica", "B", 18)
-    pdf.cell(0, 10, "Terminal de Gestion Patrimonial - Reporte", ln=True, align="C")
+    pdf.cell(0, 12, "Institutional Global Terminal", ln=True, align="C")
+    pdf.set_font("helvetica", "B", 10)
+    pdf.cell(0, 8, f"Fecha de reporte: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}", ln=True, align="C")
     pdf.ln(5)
-    # Bloque de KPIs en PDF
-    pdf.set_font("helvetica", "B", 12)
+    
+    # KPIs en PDF (Corregido: Ahora se muestran los valores)
     pdf.set_fill_color(240, 240, 240)
-    pdf.cell(0, 10, f" RESUMEN: Valor: ${t_nav:,.2f} | Utilidad: ${r_sum:,.2f} | Plusvalia: ${u_net:,.2f}", ln=True, fill=True)
+    pdf.set_font("helvetica", "B", 12)
+    pdf.cell(0, 10, f" VALOR: ${t_nav:,.2f} | UTILIDAD: ${r_sum:,.2f} | PLUSVALIA: ${u_net:,.2f}", ln=True, fill=True)
     pdf.ln(5)
+
     for t, info in portfolio.items():
         if t in active_data:
             m = active_data[t]
             net_pnl = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
             pnl_pct = (net_pnl / info["total_net_cost"]) * 100 if info["total_net_cost"] > 0 else 0
+            
             pdf.set_fill_color(30, 33, 48); pdf.set_text_color(255, 255, 255); pdf.set_font("helvetica", "B", 11)
-            pdf.cell(0, 10, f" {t} | Precio USD: ${m['p_usd']:,.2f} | PnL: ${net_pnl:,.2f} ({pnl_pct:+.2f}%)", ln=True, fill=True)
+            pdf.cell(0, 10, f" {t} | Precio USD: ${m['p_usd']:,.2f} | PnL Real: ${net_pnl:,.2f} ({pnl_pct:+.2f}%)", ln=True, fill=True)
+            
             pdf.set_text_color(0, 0, 0); pdf.set_font("helvetica", "B", 9)
             pdf.cell(60, 8, "Cantidad", 1, 0, "C"); pdf.cell(60, 8, "Precio Bruto (MXN)", 1, 0, "C"); pdf.cell(60, 8, "Fecha", 1, 1, "C")
+            
             pdf.set_font("helvetica", "", 9)
             for layer in info["layers"]:
-                pdf.cell(60, 8, str(layer["qty"]), 1, 0, "C"); pdf.cell(60, 8, f"${layer['p_gross']:,.2f}", 1, 0, "C"); pdf.cell(60, 8, layer["date"], 1, 1, "C")
+                pdf.cell(60, 8, str(layer["qty"]), 1, 0, "C")
+                pdf.cell(60, 8, f"${layer['p_gross']:,.2f}", 1, 0, "C")
+                pdf.cell(60, 8, layer["date"], 1, 1, "C")
             pdf.ln(5)
     return bytes(pdf.output())
 
 with col_mon_pdf:
     if portfolio:
         pdf_port = export_portfolio_pdf(total_nav, realized_sum, unrealized_net)
-        st.download_button("📥 Reporte Completo PDF", data=pdf_port, file_name="Reporte_Patrimonial.pdf", mime="application/pdf")
+        st.download_button("📥 Descargar Reporte PDF", data=pdf_port, file_name="Terminal_Bursatil_Portafolio.pdf", mime="application/pdf")
 
 if not portfolio: st.info("Sin posiciones activas.")
 else:
@@ -229,20 +238,15 @@ if df_t is not None:
     fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
-    def export_chart_pdf(fig_obj, t_name):
-        pdf = FPDF(); pdf.add_page(); pdf.set_font("helvetica", "B", 16)
-        pdf.cell(0, 10, f"Analisis Tecnico: {t_name}", ln=True, align="C")
-        pdf.ln(5)
-        # Try-Except para capturar errores de Kaleido sin tirar la app
-        try:
-            img_b = fig_obj.to_image(format="png", width=1200, height=800, engine="kaleido")
-            pdf.image(io.BytesIO(img_b), x=10, y=30, w=190)
-            return bytes(pdf.output())
-        except Exception as e: return None
-
-    chart_data = export_chart_pdf(fig, t_tech)
-    if chart_data: st.download_button("📈 Descargar Gráfico PDF", data=chart_data, file_name=f"Grafico_{t_tech}.pdf", mime="application/pdf")
-    else: st.warning("Error de renderizado en servidor. Asegurese de usar kaleido==0.1.0post1")
+    # Exportación robusta de imagen
+    try:
+        chart_bytes = fig.to_image(format="png", width=1200, height=800, engine="kaleido")
+        pdf_chart = FPDF(); pdf_chart.add_page(); pdf_chart.set_font("helvetica", "B", 16)
+        pdf_chart.cell(0, 10, f"Analisis Tecnico: {t_tech}", ln=True, align="C")
+        pdf_chart.image(io.BytesIO(chart_bytes), x=10, y=30, w=190)
+        st.download_button("📈 Descargar Grafico PDF", data=bytes(pdf_chart.output()), file_name=f"Analisis_{t_tech}.pdf", mime="application/pdf")
+    except Exception as e:
+        st.warning("⚠️ El renderizado PDF de graficos requiere kaleido==0.1.0post1 en el servidor.")
 
 # --- 11. AGENTE TOBIAS ---
 s_list = []
