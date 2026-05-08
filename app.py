@@ -67,11 +67,12 @@ def clean_df(df):
 @st.cache_data(ttl=60)
 def get_fx_rate():
     try:
-        data = yf.Ticker("USDMXN=X").history(period="1d", interval="1m")
+        # Se utiliza un periodo de 2 días para garantizar la obtención del último cierre válido
+        data = yf.Ticker("USDMXN=X").history(period="2d")
         if not data.empty:
             return float(data['Close'].iloc[-1])
-        return 17.5110 
-    except: return 17.5110
+        return 17.2845 
+    except: return 17.2845
 
 @st.cache_data(ttl=300)
 def get_market_data(ticker):
@@ -168,11 +169,13 @@ def export_portfolio_pdf():
             pdf.set_text_color(255, 255, 255)
             pdf.set_font("helvetica", "B", 11)
             pdf.cell(0, 10, f" {t} | Precio USD: ${m['p_usd']:,.2f}", ln=True, fill=True)
+            
             pdf.set_text_color(0, 0, 0)
             pdf.set_font("helvetica", "B", 9)
             pdf.cell(60, 8, "Cantidad (qty)", 1, 0, "C")
             pdf.cell(60, 8, "Precio Bruto (p_gross MXN)", 1, 0, "C")
             pdf.cell(60, 8, "Fecha", 1, 1, "C")
+            
             pdf.set_font("helvetica", "", 9)
             for layer in info["layers"]:
                 pdf.cell(60, 8, str(layer["qty"]), 1, 0, "C")
@@ -198,6 +201,7 @@ else:
             status = "🟢" if net_pnl >= 0 else "🔴"
             weight = (m["v_mkt"] / total_nav) * 100
             v_d = ((m["p_usd"] / m["prev_usd"]) - 1) * 100
+            
             h_text = f"{t} | USD: ${m['p_usd']:,.2f} ({v_d:+.2f}%) | Real: {status} ${net_pnl:,.2f} ({pnl_pct:+.2f}%) | Peso: {weight:.1f}%"
             with st.expander(h_text):
                 c_df, c_btn = st.columns([0.7, 0.3])
@@ -237,9 +241,15 @@ df_t = get_market_data(t_tech)
 
 if df_t is not None:
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.4, 0.15, 0.22, 0.23])
+    
+    # Velas
     fig.add_trace(go.Candlestick(x=df_t.index, open=df_t['open'], high=df_t['high'], low=df_t['low'], close=df_t['close'], name="Precio"), row=1, col=1)
+    
+    # Volumen
     v_colors = ['#26a69a' if df_t['close'].iloc[i] >= df_t['open'].iloc[i] else '#ef5350' for i in range(len(df_t))]
     fig.add_trace(go.Bar(x=df_t.index, y=df_t['volume'], name="Volumen", marker_color=v_colors, opacity=0.8), row=2, col=1)
+    
+    # MACD
     m_list = [c for c in df_t.columns if 'macd' in c.lower() and 'h' not in c.lower() and 's' not in c.lower()]
     s_list = [c for c in df_t.columns if 'macds' in c.lower()]
     h_list = [c for c in df_t.columns if 'macdh' in c.lower()]
@@ -247,6 +257,8 @@ if df_t is not None:
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_list[0]], name="MACD", line=dict(color='#00e1ff', width=1.5)), row=3, col=1)
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
         fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
+
+    # Stoch RSI
     k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
     d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
     if k_list and d_list:
