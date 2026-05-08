@@ -224,7 +224,10 @@ else:
                                 rev_net = (q_sell * p_sell_gross) * (1 - f_total)
                                 avg_net_cost = info["total_net_cost"] / info["shares"]
                                 pnl_realized = float(rev_net - (q_sell * avg_net_cost))
-                                supabase.table("trades").insert({"user_id", user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)}).execute()
+                                
+                                # FIX DE SINTAXIS: Se cambiaron las comas por dos puntos en el diccionario
+                                supabase.table("trades").insert({"user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)}).execute()
+                                
                                 remaining_shares = info["shares"] - q_sell
                                 if remaining_shares <= 0:
                                     supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
@@ -281,7 +284,6 @@ if df_t is not None:
         pdf.set_font("helvetica", "B", 16)
         pdf.cell(0, 10, f"Analisis Tecnico: {ticker_name}", ln=True, align="C")
         pdf.ln(5)
-        # Captura de imagen del gráfico (requiere kaleido)
         img_bytes = fig_obj.to_image(format="png", width=1200, height=800)
         img_buf = io.BytesIO(img_bytes)
         pdf.image(img_buf, x=10, y=30, w=190)
