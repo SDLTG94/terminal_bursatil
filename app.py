@@ -8,6 +8,7 @@ from supabase import create_client, Client
 import streamlit.components.v1 as components
 import json
 from fpdf import FPDF
+from fpdf.enums import XPos, YPos
 import io
 
 # --- 1. CONFIGURACIÓN E INTERFAZ ---
@@ -113,6 +114,7 @@ with st.sidebar:
             if t_final:
                 c_bruto = float(q_in * p_in)
                 c_neto = float(c_bruto * (1 + f_total))
+                # FIX SINTAXIS: user_id: user_id
                 supabase.table("positions").insert({"user_id": user_id, "ticker": t_final, "shares": float(q_in), "total_gross_cost": c_bruto, "total_net_cost": c_neto}).execute()
                 st.rerun()
 
@@ -142,18 +144,20 @@ col_title, col_pdf = st.columns([0.7, 0.3])
 with col_title:
     st.subheader("📊 Monitoreo de Posiciones Activas")
 
-def generate_full_report(t_nav, r_sum, u_net):
+def generate_portfolio_pdf(t_nav, r_sum, u_net):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("helvetica", "B", 18)
-    pdf.cell(0, 10, "Terminal de Gestion Patrimonial - Reporte de Activos", ln=True, align="C")
+    # New syntax for new_x and new_y to avoid deprecation warnings
+    pdf.cell(0, 12, "Reporte Institucional de Portafolio", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
     pdf.set_font("helvetica", "", 10)
-    pdf.cell(0, 8, f"Fecha: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}", ln=True, align="C")
+    pdf.cell(0, 8, f"Generado: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
     pdf.ln(5)
     
-    # Bloque de KPIs
-    pdf.set_fill_color(240, 240, 240); pdf.set_font("helvetica", "B", 12)
-    pdf.cell(0, 10, f" VALOR TOTAL: ${t_nav:,.2f} | UTILIDAD: ${r_sum:,.2f} | PLUSVALIA: ${u_net:,.2f}", ln=True, fill=True)
+    # KPIs en el encabezado
+    pdf.set_fill_color(240, 240, 240)
+    pdf.set_font("helvetica", "B", 12)
+    pdf.cell(0, 10, f" VALOR: ${t_nav:,.2f} | UTILIDAD: ${r_sum:,.2f} | PLUSVALIA: ${u_net:,.2f}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, fill=True)
     pdf.ln(5)
 
     for t, info in portfolio.items():
@@ -161,24 +165,23 @@ def generate_full_report(t_nav, r_sum, u_net):
             m = active_data[t]; net_pnl = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
             pnl_pct = (net_pnl / info["total_net_cost"]) * 100 if info["total_net_cost"] > 0 else 0
             pdf.set_fill_color(30, 33, 48); pdf.set_text_color(255, 255, 255); pdf.set_font("helvetica", "B", 11)
-            pdf.cell(0, 10, f" {t} | Precio Actual: ${m['p_usd']:,.2f} USD | PnL: ${net_pnl:,.2f} ({pnl_pct:+.2f}%)", ln=True, fill=True)
+            pdf.cell(0, 10, f" {t} | Precio Actual: ${m['p_usd']:,.2f} USD | PnL: ${net_pnl:,.2f} ({pnl_pct:+.2f}%)", new_x=XPos.LMARGIN, new_y=YPos.NEXT, fill=True)
             pdf.set_text_color(0, 0, 0); pdf.set_font("helvetica", "B", 9)
-            # Tabla expandida a lo largo del cuadro
-            pdf.cell(63, 8, "Cantidad (Shares)", 1, 0, "C")
-            pdf.cell(63, 8, "Costo Promedio (MXN)", 1, 0, "C")
-            pdf.cell(63, 8, "Fecha de Adquisicion", 1, 1, "C")
+            pdf.cell(63, 8, "Cantidad", 1, new_x=XPos.RIGHT, new_y=YPos.TOP, align="C")
+            pdf.cell(63, 8, "Costo Promedio (MXN)", 1, new_x=XPos.RIGHT, new_y=YPos.TOP, align="C")
+            pdf.cell(63, 8, "Fecha", 1, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
             pdf.set_font("helvetica", "", 9)
             for layer in info["layers"]:
-                pdf.cell(63, 8, str(layer["qty"]), 1, 0, "C")
-                pdf.cell(63, 8, f"${layer['p_gross']:,.2f}", 1, 0, "C")
-                pdf.cell(63, 8, layer["date"], 1, 1, "C")
+                pdf.cell(63, 8, str(layer["qty"]), 1, new_x=XPos.RIGHT, new_y=YPos.TOP, align="C")
+                pdf.cell(63, 8, f"${layer['p_gross']:,.2f}", 1, new_x=XPos.RIGHT, new_y=YPos.TOP, align="C")
+                pdf.cell(63, 8, layer["date"], 1, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
             pdf.ln(5)
     return bytes(pdf.output())
 
 with col_pdf:
     if portfolio:
-        pdf_bytes = generate_full_report(total_nav, realized_sum, unrealized_net)
-        st.download_button("📥 Descargar Reporte PDF Completo", data=pdf_bytes, file_name="Reporte_Detallado_Portafolio.pdf", mime="application/pdf")
+        pdf_bytes = generate_portfolio_pdf(total_nav, realized_sum, unrealized_net)
+        st.download_button("📥 Descargar Detalle Portafolio PDF", data=pdf_bytes, file_name="Portafolio_Detalle.pdf", mime="application/pdf")
 
 if not portfolio:
     st.info("Sin posiciones activas.")
@@ -206,6 +209,7 @@ else:
                             if st.form_submit_button("Ejecutar Venta"):
                                 rev_net = (q_sell * p_sell) * (1 - f_total); avg_net_cost = info["total_net_cost"] / info["shares"]
                                 pnl_realized = float(rev_net - (q_sell * avg_net_cost))
+                                # FIX SINTAXIS: user_id: user_id
                                 supabase.table("trades").insert({"user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)}).execute()
                                 remaining = info["shares"] - q_sell
                                 if remaining <= 0: supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
@@ -242,18 +246,18 @@ if df_t is not None:
     try:
         chart_img = fig.to_image(format="png", width=1200, height=800, engine="kaleido")
         pdf_c = FPDF(); pdf_c.add_page(); pdf_c.set_font("helvetica", "B", 16)
-        pdf_c.cell(0, 10, f"Analisis Tecnico: {t_tech}", ln=True, align="C")
+        pdf_c.cell(0, 10, f"Analisis Tecnico: {t_tech}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
         pdf_c.image(io.BytesIO(chart_img), x=10, y=30, w=190)
         st.download_button("📈 Descargar Analisis Tecnico PDF", data=bytes(pdf_c.output()), file_name=f"Analisis_{t_tech}.pdf", mime="application/pdf")
     except Exception:
-        st.warning("⚠️ Error de renderizado en servidor. Verifique kaleido==0.1.0post1 en requirements.txt")
+        st.warning("⚠️ Error de renderizado. Verifique kaleido==0.1.0post1 en requirements.txt")
 
-# --- 11. AGENTE TOBIAS ---
-summary_items = []
+# --- 11. AGENTE TOBIAS (POSICIÓN ESTABLE) ---
+sum_items = []
 for t, info in portfolio.items():
     if t in active_data:
         m = active_data[t]; p_ret = ((m["v_mkt"]*(1-f_total)) - info["total_net_cost"]) / info["total_net_cost"] * 100
-        summary_items.append(f"{t}: {int(info['shares'])} titulos, costo prom ${info['total_net_cost']/info['shares']:.2f} MXN, retorno {p_ret:+.2f}%")
-p_summary = " | ".join(summary_items) if summary_items else "Sin posiciones"
-tobias_html = f"""<div class="floating-agent"><elevenlabs-convai agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8" dynamic-variables='{{"portfolio_context": "{p_summary.replace('"', '\\"')}"}}'></elevenlabs-convai><script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script></div>"""
+        sum_items.append(f"{t}: {int(info['shares'])} titulos, costo prom ${info['total_net_cost']/info['shares']:.2f} MXN, retorno {p_ret:+.2f}%")
+p_summary = " | ".join(sum_items) if sum_items else "Sin posiciones"
+tobias_html = f"""<div class="floating-agent"><elevenlabs-convai agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8" dynamic-variables='{{ "portfolio_context": "{p_summary.replace('"', '\\"')}" }}'></elevenlabs-convai><script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script></div>"""
 components.html(tobias_html, height=200)
