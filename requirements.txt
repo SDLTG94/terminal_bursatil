@@ -7,3 +7,4 @@ plotly
 streamlit-autorefresh
 fpdf2
 kaleido
+kaleido==0.1.0post1
