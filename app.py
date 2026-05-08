@@ -8,7 +8,6 @@ from supabase import create_client, Client
 import streamlit.components.v1 as components
 import json
 from fpdf import FPDF
-from fpdf.enums import XPos, YPos
 import io
 
 # --- 1. CONFIGURACIÓN E INTERFAZ ---
@@ -19,7 +18,14 @@ st.markdown("""
     .kpi-card { background-color: #1e2130; padding: 20px; border-radius: 10px; border-left: 5px solid #00e1ff; text-align: center; margin-bottom: 10px; }
     .kpi-val { font-size: 26px; font-weight: bold; color: white; }
     .kpi-lbl { font-size: 13px; color: #808495; text-transform: uppercase; letter-spacing: 1px; }
-    .floating-agent { position: fixed; bottom: 20px; right: 20px; z-index: 9999; background: transparent; }
+    
+    .floating-agent {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 9999;
+        background: transparent;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -62,7 +68,8 @@ def clean_df(df):
 def get_fx_rate():
     try:
         data = yf.Ticker("USDMXN=X").history(period="1d", interval="1m")
-        if not data.empty: return float(data['Close'].iloc[-1])
+        if not data.empty:
+            return float(data['Close'].iloc[-1])
         return 17.5110 
     except: return 17.5110
 
@@ -78,6 +85,7 @@ def get_market_data(ticker):
 
 # --- 5. CARGA DE DATOS ---
 user_id = st.session_state.user.id
+
 try:
     res_pos = supabase.table("positions").select("*").eq("user_id", user_id).execute()
     positions_raw = res_pos.data
@@ -114,7 +122,6 @@ with st.sidebar:
             if t_final:
                 c_bruto = float(q_in * p_in)
                 c_neto = float(c_bruto * (1 + f_total))
-                # FIX SINTAXIS: user_id: user_id
                 supabase.table("positions").insert({"user_id": user_id, "ticker": t_final, "shares": float(q_in), "total_gross_cost": c_bruto, "total_net_cost": c_neto}).execute()
                 st.rerun()
 
@@ -139,60 +146,63 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 9. MONITOREO Y REPORTE PDF ---
-col_title, col_pdf = st.columns([0.7, 0.3])
-with col_title:
+# --- 9. MONITOREO Y VENTAS ---
+col_mon_title, col_mon_pdf = st.columns([0.75, 0.25])
+with col_mon_title:
     st.subheader("📊 Monitoreo de Posiciones Activas")
 
-def generate_portfolio_pdf(t_nav, r_sum, u_net):
+# Lógica del Botón Descargable (Versión 1.3.3 Fix)
+def export_portfolio_pdf():
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("helvetica", "B", 18)
-    # New syntax for new_x and new_y to avoid deprecation warnings
-    pdf.cell(0, 12, "Reporte Institucional de Portafolio", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
-    pdf.set_font("helvetica", "", 10)
-    pdf.cell(0, 8, f"Generado: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+    pdf.set_font("helvetica", "B", 16)
+    pdf.cell(0, 10, "Detalle de Posiciones del Portafolio", ln=True, align="C")
     pdf.ln(5)
-    
-    # KPIs en el encabezado
-    pdf.set_fill_color(240, 240, 240)
-    pdf.set_font("helvetica", "B", 12)
-    pdf.cell(0, 10, f" VALOR: ${t_nav:,.2f} | UTILIDAD: ${r_sum:,.2f} | PLUSVALIA: ${u_net:,.2f}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, fill=True)
+    pdf.set_font("helvetica", "", 10)
+    pdf.cell(0, 10, f"Fecha: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}", ln=True)
     pdf.ln(5)
 
     for t, info in portfolio.items():
         if t in active_data:
-            m = active_data[t]; net_pnl = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
-            pnl_pct = (net_pnl / info["total_net_cost"]) * 100 if info["total_net_cost"] > 0 else 0
-            pdf.set_fill_color(30, 33, 48); pdf.set_text_color(255, 255, 255); pdf.set_font("helvetica", "B", 11)
-            pdf.cell(0, 10, f" {t} | Precio Actual: ${m['p_usd']:,.2f} USD | PnL: ${net_pnl:,.2f} ({pnl_pct:+.2f}%)", new_x=XPos.LMARGIN, new_y=YPos.NEXT, fill=True)
-            pdf.set_text_color(0, 0, 0); pdf.set_font("helvetica", "B", 9)
-            pdf.cell(63, 8, "Cantidad", 1, new_x=XPos.RIGHT, new_y=YPos.TOP, align="C")
-            pdf.cell(63, 8, "Costo Promedio (MXN)", 1, new_x=XPos.RIGHT, new_y=YPos.TOP, align="C")
-            pdf.cell(63, 8, "Fecha", 1, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+            m = active_data[t]
+            pdf.set_fill_color(30, 33, 48)
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_font("helvetica", "B", 11)
+            pdf.cell(0, 10, f" {t} | Precio USD: ${m['p_usd']:,.2f}", ln=True, fill=True)
+            
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font("helvetica", "B", 9)
+            pdf.cell(60, 8, "Cantidad (qty)", 1, 0, "C")
+            pdf.cell(60, 8, "Precio Bruto (p_gross MXN)", 1, 0, "C")
+            pdf.cell(60, 8, "Fecha", 1, 1, "C")
+            
             pdf.set_font("helvetica", "", 9)
             for layer in info["layers"]:
-                pdf.cell(63, 8, str(layer["qty"]), 1, new_x=XPos.RIGHT, new_y=YPos.TOP, align="C")
-                pdf.cell(63, 8, f"${layer['p_gross']:,.2f}", 1, new_x=XPos.RIGHT, new_y=YPos.TOP, align="C")
-                pdf.cell(63, 8, layer["date"], 1, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
+                pdf.cell(60, 8, str(layer["qty"]), 1, 0, "C")
+                pdf.cell(60, 8, f"${layer['p_gross']:,.2f}", 1, 0, "C")
+                pdf.cell(60, 8, layer["date"], 1, 1, "C")
             pdf.ln(5)
+    # Fix 1.3.3: Convertimos explícitamente a bytes
     return bytes(pdf.output())
 
-with col_pdf:
+with col_mon_pdf:
     if portfolio:
-        pdf_bytes = generate_portfolio_pdf(total_nav, realized_sum, unrealized_net)
-        st.download_button("📥 Descargar Detalle Portafolio PDF", data=pdf_bytes, file_name="Portafolio_Detalle.pdf", mime="application/pdf")
+        pdf_data = export_portfolio_pdf()
+        st.download_button("📥 Descargar Detalle Portafolio", data=pdf_data, file_name="Detalle_Portafolio.pdf", mime="application/pdf")
 
 if not portfolio:
     st.info("Sin posiciones activas.")
 else:
     for t, info in portfolio.items():
         if t in active_data:
-            m = active_data[t]; net_pnl = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
+            m = active_data[t]
+            net_pnl = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
             pnl_pct = (net_pnl / info["total_net_cost"]) * 100 if info["total_net_cost"] > 0 else 0
             be_usd = info["total_net_cost"] / (info["shares"] * fx_now * (1 - f_total))
             status = "🟢" if net_pnl >= 0 else "🔴"
-            weight = (m["v_mkt"] / total_nav) * 100; v_d = ((m["p_usd"] / m["prev_usd"]) - 1) * 100
+            weight = (m["v_mkt"] / total_nav) * 100
+            v_d = ((m["p_usd"] / m["prev_usd"]) - 1) * 100
+            
             h_text = f"{t} | USD: ${m['p_usd']:,.2f} ({v_d:+.2f}%) | Real: {status} ${net_pnl:,.2f} ({pnl_pct:+.2f}%) | Peso: {weight:.1f}%"
             with st.expander(h_text):
                 c_df, c_btn = st.columns([0.7, 0.3])
@@ -201,63 +211,83 @@ else:
                     st.write(f"**Breakeven USD Sugerido:** `${be_usd:,.2f}`")
                 with c_btn:
                     if st.button("🗑️ Eliminar Activo", key=f"del_{t}"):
-                        supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute(); st.rerun()
+                        supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
+                        st.rerun()
                     st.divider()
                     with st.expander("📤 Registrar Venta"):
                         with st.form(f"sell_{t}"):
-                            q_sell = st.number_input("Títulos", 1, int(info["shares"])); p_sell = st.number_input("Precio Venta Bruto (MXN)", min_value=0.01)
+                            q_sell = st.number_input("Títulos a Vender", 1, int(info["shares"]))
+                            p_sell_gross = st.number_input("Precio Venta Bruto (MXN)", min_value=0.01)
                             if st.form_submit_button("Ejecutar Venta"):
-                                rev_net = (q_sell * p_sell) * (1 - f_total); avg_net_cost = info["total_net_cost"] / info["shares"]
+                                rev_net = (q_sell * p_sell_gross) * (1 - f_total)
+                                avg_net_cost = info["total_net_cost"] / info["shares"]
                                 pnl_realized = float(rev_net - (q_sell * avg_net_cost))
-                                # FIX SINTAXIS: user_id: user_id
                                 supabase.table("trades").insert({"user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)}).execute()
-                                remaining = info["shares"] - q_sell
-                                if remaining <= 0: supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
+                                remaining_shares = info["shares"] - q_sell
+                                if remaining_shares <= 0:
+                                    supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
                                 else:
-                                    avg_g = info["total_gross_cost"] / info["shares"]
-                                    supabase.table("positions").update({"shares": float(remaining), "total_gross_cost": float(remaining * avg_g), "total_net_cost": float(remaining * avg_net_cost)}).eq("id", info["ids"][0]).execute()
+                                    avg_gross_cost = info["total_gross_cost"] / info["shares"]
+                                    supabase.table("positions").update({
+                                        "shares": float(remaining_shares), 
+                                        "total_gross_cost": float(remaining_shares * avg_gross_cost), 
+                                        "total_net_cost": float(remaining_shares * avg_net_cost)
+                                    }).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
-# --- 10. GRÁFICO TÉCNICO Y DESCARGA ---
+# --- 10. GRÁFICO TÉCNICO ---
 st.divider()
-t_tech = st.selectbox("Selecciona Activo para Gráfico Técnico:", options=list(portfolio.keys()) if portfolio else ["SOXX"])
+t_tech = st.selectbox("Gráfico Técnico:", options=list(portfolio.keys()) if portfolio else ["SOXX"])
 df_t = get_market_data(t_tech)
+
 if df_t is not None:
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.4, 0.15, 0.22, 0.23])
+    
+    # Velas
     fig.add_trace(go.Candlestick(x=df_t.index, open=df_t['open'], high=df_t['high'], low=df_t['low'], close=df_t['close'], name="Precio"), row=1, col=1)
-    v_col = ['#26a69a' if df_t['close'].iloc[i] >= df_t['open'].iloc[i] else '#ef5350' for i in range(len(df_t))]
-    fig.add_trace(go.Bar(x=df_t.index, y=df_t['volume'], name="Volumen", marker_color=v_col, opacity=0.8), row=2, col=1)
+    
+    # Volumen
+    v_colors = ['#26a69a' if df_t['close'].iloc[i] >= df_t['open'].iloc[i] else '#ef5350' for i in range(len(df_t))]
+    fig.add_trace(go.Bar(x=df_t.index, y=df_t['volume'], name="Volumen", marker_color=v_colors, opacity=0.8), row=2, col=1)
+    
+    # MACD
     m_list = [c for c in df_t.columns if 'macd' in c.lower() and 'h' not in c.lower() and 's' not in c.lower()]
     s_list = [c for c in df_t.columns if 'macds' in c.lower()]
+    h_list = [c for c in df_t.columns if 'macdh' in c.lower()]
     if m_list and s_list:
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[m_list[0]], name="MACD", line=dict(color='#00e1ff', width=1.5)), row=3, col=1)
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[s_list[0]], name="Signal", line=dict(color='#ff9900', width=1.5)), row=3, col=1)
+        fig.add_trace(go.Bar(x=df_t.index, y=df_t[h_list[0]], name="Hist", marker_color='rgba(128,128,128,0.5)'), row=3, col=1)
+
+    # Stoch RSI
     k_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'k' in c.lower()]
     d_list = [c for c in df_t.columns if 'stochrsi' in c.lower() and 'd' in c.lower()]
     if k_list and d_list:
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[k_list[0]], name="%K", line=dict(color='#00ff88', width=1.5)), row=4, col=1)
         fig.add_trace(go.Scatter(x=df_t.index, y=df_t[d_list[0]], name="%D", line=dict(color='#ff4b4b', width=1.5, dash='dot')), row=4, col=1)
+        fig.add_hline(y=80, line_dash="dash", line_color="rgba(255,255,255,0.3)", row=4, col=1)
+        fig.add_hline(y=20, line_dash="dash", line_color="rgba(255,255,255,0.3)", row=4, col=1)
 
     fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=60, t=10, b=10), showlegend=False)
     fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
-    # Exportación segura de gráfico
-    try:
-        chart_img = fig.to_image(format="png", width=1200, height=800, engine="kaleido")
-        pdf_c = FPDF(); pdf_c.add_page(); pdf_c.set_font("helvetica", "B", 16)
-        pdf_c.cell(0, 10, f"Analisis Tecnico: {t_tech}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
-        pdf_c.image(io.BytesIO(chart_img), x=10, y=30, w=190)
-        st.download_button("📈 Descargar Analisis Tecnico PDF", data=bytes(pdf_c.output()), file_name=f"Analisis_{t_tech}.pdf", mime="application/pdf")
-    except Exception:
-        st.warning("⚠️ Error de renderizado. Verifique kaleido==0.1.0post1 en requirements.txt")
-
-# --- 11. AGENTE TOBIAS (POSICIÓN ESTABLE) ---
-sum_items = []
+# --- 11. AGENTE TOBIAS ---
+sum_list = []
 for t, info in portfolio.items():
     if t in active_data:
-        m = active_data[t]; p_ret = ((m["v_mkt"]*(1-f_total)) - info["total_net_cost"]) / info["total_net_cost"] * 100
-        sum_items.append(f"{t}: {int(info['shares'])} titulos, costo prom ${info['total_net_cost']/info['shares']:.2f} MXN, retorno {p_ret:+.2f}%")
-p_summary = " | ".join(sum_items) if sum_items else "Sin posiciones"
-tobias_html = f"""<div class="floating-agent"><elevenlabs-convai agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8" dynamic-variables='{{ "portfolio_context": "{p_summary.replace('"', '\\"')}" }}'></elevenlabs-convai><script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script></div>"""
+        m = active_data[t]
+        pnl_p = ((m["v_mkt"]*(1-f_total)) - info["total_net_cost"]) / info["total_net_cost"] * 100
+        sum_list.append(f"{t}: {int(info['shares'])} títulos, costo promedio ${info['total_net_cost']/info['shares']:.2f} MXN, retorno {pnl_p:+.2f}%")
+portfolio_summary = " | ".join(sum_list) if sum_list else "Sin posiciones"
+
+tobias_html = f"""
+<div class="floating-agent">
+    <elevenlabs-convai 
+        agent-id="agent_4901kqp1gs5bfqstk9zw2p61rpe8"
+        dynamic-variables='{{"portfolio_context": "{portfolio_summary}"}}'>
+    </elevenlabs-convai>
+    <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
+</div>
+"""
 components.html(tobias_html, height=200)
