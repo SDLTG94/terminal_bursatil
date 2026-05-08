@@ -7,6 +7,8 @@ from plotly.subplots import make_subplots
 from supabase import create_client, Client
 import streamlit.components.v1 as components
 import json
+from fpdf import FPDF
+import io
 
 # --- 1. CONFIGURACIÓN E INTERFAZ ---
 st.set_page_config(layout="wide", page_title="Institutional Global Terminal", page_icon="🏛️")
@@ -145,7 +147,51 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 st.divider()
 
 # --- 9. MONITOREO Y VENTAS ---
-st.subheader("📊 Monitoreo de Posiciones Activas")
+col_mon_title, col_mon_pdf = st.columns([0.75, 0.25])
+with col_mon_title:
+    st.subheader("📊 Monitoreo de Posiciones Activas")
+
+# Función para PDF de Portafolio
+def export_portfolio_pdf():
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("helvetica", "B", 16)
+    pdf.cell(0, 10, "Reporte de Posiciones Activas", ln=True, align="C")
+    pdf.ln(5)
+    pdf.set_font("helvetica", "", 10)
+    pdf.cell(0, 10, f"Fecha de reporte: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}", ln=True)
+    pdf.ln(5)
+
+    for t, info in portfolio.items():
+        if t in active_data:
+            m = active_data[t]
+            net_pnl = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
+            pnl_pct = (net_pnl / info["total_net_cost"]) * 100 if info["total_net_cost"] > 0 else 0
+            
+            pdf.set_fill_color(30, 33, 48)
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_font("helvetica", "B", 11)
+            pdf.cell(0, 10, f" {t} | Precio USD: ${m['p_usd']:,.2f} | PnL Real: ${net_pnl:,.2f} ({pnl_pct:+.2f}%)", ln=True, fill=True)
+            
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font("helvetica", "B", 9)
+            pdf.cell(60, 8, "Cantidad (qty)", 1, 0, "C")
+            pdf.cell(60, 8, "Precio Bruto (p_gross MXN)", 1, 0, "C")
+            pdf.cell(60, 8, "Fecha", 1, 1, "C")
+            
+            pdf.set_font("helvetica", "", 9)
+            for layer in info["layers"]:
+                pdf.cell(60, 8, str(layer["qty"]), 1, 0, "C")
+                pdf.cell(60, 8, f"${layer['p_gross']:,.2f}", 1, 0, "C")
+                pdf.cell(60, 8, layer["date"], 1, 1, "C")
+            pdf.ln(5)
+    return pdf.output()
+
+with col_mon_pdf:
+    if portfolio:
+        pdf_data = export_portfolio_pdf()
+        st.download_button("📥 Descargar Detalle Portafolio", data=pdf_data, file_name="Portafolio_Detalle.pdf", mime="application/pdf")
+
 if not portfolio:
     st.info("Sin posiciones activas.")
 else:
@@ -178,7 +224,7 @@ else:
                                 rev_net = (q_sell * p_sell_gross) * (1 - f_total)
                                 avg_net_cost = info["total_net_cost"] / info["shares"]
                                 pnl_realized = float(rev_net - (q_sell * avg_net_cost))
-                                supabase.table("trades").insert({"user_id": user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)}).execute()
+                                supabase.table("trades").insert({"user_id", user_id, "ticker": t, "amount": pnl_realized, "shares": float(q_sell)}).execute()
                                 remaining_shares = info["shares"] - q_sell
                                 if remaining_shares <= 0:
                                     supabase.table("positions").delete().eq("user_id", user_id).eq("ticker", t).execute()
@@ -227,6 +273,22 @@ if df_t is not None:
     fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=60, t=10, b=10), showlegend=False)
     fig.update_yaxes(side="right", fixedrange=False, gridcolor="rgba(128,128,128,0.1)")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
+
+    # Botón PDF de Gráfico
+    def export_chart_pdf(fig_obj, ticker_name):
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("helvetica", "B", 16)
+        pdf.cell(0, 10, f"Analisis Tecnico: {ticker_name}", ln=True, align="C")
+        pdf.ln(5)
+        # Captura de imagen del gráfico (requiere kaleido)
+        img_bytes = fig_obj.to_image(format="png", width=1200, height=800)
+        img_buf = io.BytesIO(img_bytes)
+        pdf.image(img_buf, x=10, y=30, w=190)
+        return pdf.output()
+
+    chart_pdf = export_chart_pdf(fig, t_tech)
+    st.download_button("📈 Descargar Gráfico Técnico PDF", data=chart_pdf, file_name=f"Grafico_{t_tech}.pdf", mime="application/pdf")
 
 # --- 11. AGENTE TOBIAS ---
 sum_list = []

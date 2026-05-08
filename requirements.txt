@@ -5,3 +5,5 @@ pandas
 pandas-ta
 plotly
 streamlit-autorefresh
+fpdf2
+kaleido
