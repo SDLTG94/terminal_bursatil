@@ -137,22 +137,25 @@ with k3: st.markdown(f"<div class='kpi-card' style='border-left-color: #ff9900;'
 
 st.divider()
 
-# --- 9. MONITOREO Y VENTAS ---
-col_mon_title, col_mon_pdf = st.columns([0.7, 0.3])
-with col_mon_title: st.subheader("📊 Monitoreo de Posiciones Activas")
+# --- 9. MONITOREO Y REPORTE PDF ---
+col_title, col_pdf = st.columns([0.7, 0.3])
+with col_title:
+    st.subheader("📊 Monitoreo de Posiciones Activas")
 
-def export_portfolio_pdf(t_nav, r_sum, u_net):
+def generate_full_report(t_nav, r_sum, u_net):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("helvetica", "B", 18)
-    pdf.cell(0, 10, "Reporte Patrimonial Institucional", ln=True, align="C")
+    pdf.cell(0, 10, "Terminal de Gestion Patrimonial - Reporte de Activos", ln=True, align="C")
     pdf.set_font("helvetica", "", 10)
-    pdf.cell(0, 8, f"Generado el: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}", ln=True, align="C")
+    pdf.cell(0, 8, f"Fecha: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}", ln=True, align="C")
     pdf.ln(5)
-    # KPIs en el encabezado del PDF
-    pdf.set_fill_color(240, 240, 240); pdf.set_font("helvetica", "B", 11)
-    pdf.cell(0, 10, f" VALOR TOTAL: ${t_nav:,.2f} | UTILIDAD REALIZADA: ${r_sum:,.2f} | PLUSVALIA NETA: ${u_net:,.2f}", ln=True, fill=True)
+    
+    # Bloque de KPIs
+    pdf.set_fill_color(240, 240, 240); pdf.set_font("helvetica", "B", 12)
+    pdf.cell(0, 10, f" VALOR TOTAL: ${t_nav:,.2f} | UTILIDAD: ${r_sum:,.2f} | PLUSVALIA: ${u_net:,.2f}", ln=True, fill=True)
     pdf.ln(5)
+
     for t, info in portfolio.items():
         if t in active_data:
             m = active_data[t]; net_pnl = (m["v_mkt"] * (1 - f_total)) - info["total_net_cost"]
@@ -160,19 +163,25 @@ def export_portfolio_pdf(t_nav, r_sum, u_net):
             pdf.set_fill_color(30, 33, 48); pdf.set_text_color(255, 255, 255); pdf.set_font("helvetica", "B", 11)
             pdf.cell(0, 10, f" {t} | Precio Actual: ${m['p_usd']:,.2f} USD | PnL: ${net_pnl:,.2f} ({pnl_pct:+.2f}%)", ln=True, fill=True)
             pdf.set_text_color(0, 0, 0); pdf.set_font("helvetica", "B", 9)
-            pdf.cell(63, 8, "Cantidad", 1, 0, "C"); pdf.cell(63, 8, "Costo Promedio (MXN)", 1, 0, "C"); pdf.cell(63, 8, "Fecha", 1, 1, "C")
+            # Tabla expandida a lo largo del cuadro
+            pdf.cell(63, 8, "Cantidad (Shares)", 1, 0, "C")
+            pdf.cell(63, 8, "Costo Promedio (MXN)", 1, 0, "C")
+            pdf.cell(63, 8, "Fecha de Adquisicion", 1, 1, "C")
             pdf.set_font("helvetica", "", 9)
             for layer in info["layers"]:
-                pdf.cell(63, 8, str(layer["qty"]), 1, 0, "C"); pdf.cell(63, 8, f"${layer['p_gross']:,.2f}", 1, 0, "C"); pdf.cell(63, 8, layer["date"], 1, 1, "C")
+                pdf.cell(63, 8, str(layer["qty"]), 1, 0, "C")
+                pdf.cell(63, 8, f"${layer['p_gross']:,.2f}", 1, 0, "C")
+                pdf.cell(63, 8, layer["date"], 1, 1, "C")
             pdf.ln(5)
     return bytes(pdf.output())
 
-with col_mon_pdf:
+with col_pdf:
     if portfolio:
-        pdf_port = export_portfolio_pdf(total_nav, realized_sum, unrealized_net)
-        st.download_button("📥 Descargar Reporte PDF", data=pdf_port, file_name="Terminal_Bursatil_Reporte.pdf", mime="application/pdf")
+        pdf_bytes = generate_full_report(total_nav, realized_sum, unrealized_net)
+        st.download_button("📥 Descargar Reporte PDF Completo", data=pdf_bytes, file_name="Reporte_Detallado_Portafolio.pdf", mime="application/pdf")
 
-if not portfolio: st.info("Sin posiciones activas.")
+if not portfolio:
+    st.info("Sin posiciones activas.")
 else:
     for t, info in portfolio.items():
         if t in active_data:
@@ -205,9 +214,9 @@ else:
                                     supabase.table("positions").update({"shares": float(remaining), "total_gross_cost": float(remaining * avg_g), "total_net_cost": float(remaining * avg_net_cost)}).eq("id", info["ids"][0]).execute()
                                 st.rerun()
 
-# --- 10. GRÁFICO TÉCNICO ---
+# --- 10. GRÁFICO TÉCNICO Y DESCARGA ---
 st.divider()
-t_tech = st.selectbox("Gráfico Técnico:", options=list(portfolio.keys()) if portfolio else ["SOXX"])
+t_tech = st.selectbox("Selecciona Activo para Gráfico Técnico:", options=list(portfolio.keys()) if portfolio else ["SOXX"])
 df_t = get_market_data(t_tech)
 if df_t is not None:
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.4, 0.15, 0.22, 0.23])
@@ -231,13 +240,13 @@ if df_t is not None:
 
     # Exportación segura de gráfico
     try:
-        chart_bytes = fig.to_image(format="png", width=1200, height=800, engine="kaleido")
-        pdf_chart = FPDF(); pdf_chart.add_page(); pdf_chart.set_font("helvetica", "B", 16)
-        pdf_chart.cell(0, 10, f"Analisis Tecnico: {t_tech}", ln=True, align="C")
-        pdf_chart.image(io.BytesIO(chart_bytes), x=10, y=30, w=190)
-        st.download_button("📈 Descargar Grafico PDF", data=bytes(pdf_chart.output()), file_name=f"Grafico_Tecnico_{t_tech}.pdf", mime="application/pdf")
+        chart_img = fig.to_image(format="png", width=1200, height=800, engine="kaleido")
+        pdf_c = FPDF(); pdf_c.add_page(); pdf_c.set_font("helvetica", "B", 16)
+        pdf_c.cell(0, 10, f"Analisis Tecnico: {t_tech}", ln=True, align="C")
+        pdf_c.image(io.BytesIO(chart_img), x=10, y=30, w=190)
+        st.download_button("📈 Descargar Analisis Tecnico PDF", data=bytes(pdf_c.output()), file_name=f"Analisis_{t_tech}.pdf", mime="application/pdf")
     except Exception:
-        st.warning("⚠️ El renderizado PDF requiere kaleido==0.1.0post1. Verifique su requirements.txt.")
+        st.warning("⚠️ Error de renderizado en servidor. Verifique kaleido==0.1.0post1 en requirements.txt")
 
 # --- 11. AGENTE TOBIAS ---
 summary_items = []
